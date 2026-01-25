@@ -1,0 +1,174 @@
+# =============================================================================
+# prod-ready-backend - Docker Compose Configuration
+# Production-ready FastAPI backend with PostgreSQL, Redis, and Nginx
+# =============================================================================
+
+services:
+  # =============================================================================
+  # DATABASE SERVICE - PostgreSQL with PostGIS and optimizations
+  # =============================================================================
+  postgres:
+    image: postgis/postgis:17-3.5-alpine
+    platform: linux/amd64
+    container_name: prb-postgres
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - prb-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prod_user} -d ${POSTGRES_DB:-prod_ready_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+
+  # =============================================================================
+  # REDIS SERVICE - Caching and session management
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: prb-redis
+    hostname: redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - prb-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
+
+  # =============================================================================
+  # NGINX REVERSE PROXY (Development mode with relaxed limits)
+  # =============================================================================
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.dev
+    container_name: prb-nginx-dev
+    hostname: nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - prb-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/api/v1/system/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # =============================================================================
+  # BACKEND SERVICE - FastAPI Application
+  # =============================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: app.Dockerfile
+      target: ${DOCKER_TARGET:-development}
+      args:
+        ENV_STAGE: ${ENV_STAGE:-local}
+    container_name: prb-backend
+    hostname: backend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      - ENV_STAGE=${ENV_STAGE:-local}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-prod_ready_db}
+      - POSTGRES_USER=${POSTGRES_USER:-prod_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-prod_password}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - FORWARDED_ALLOW_IPS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+      - PYTHONPATH=/app:/
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - backend_logs:/app/logs
+    networks:
+      - prb-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/system/health').read()"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`api.prod-ready.local`)"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  prb-network:
+    driver: bridge
+    name: prb-network
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+    name: prb-postgres-data
+  redis_data:
+    driver: local
+    name: prb-redis-data
+  backend_logs:
+    driver: local
+    name: prb-backend-logs
+  nginx_logs:
+    driver: local
+    name: prb-nginx-logs

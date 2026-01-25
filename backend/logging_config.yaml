@@ -1,0 +1,202 @@
+version: 1
+disable_existing_loggers: false
+
+# ============================================================================
+# FORMATTERS
+# ============================================================================
+# - default/detailed: Human-readable for dev/local (used when JSON_LOGS=false)
+# - json: Structured JSON for non-structlog loggers in production
+# - passthrough: For structlog loggers (they output JSON already)
+# ============================================================================
+
+formatters:
+  default:
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    datefmt: '%Y-%m-%d %H:%M:%S'
+
+  detailed:
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(module)s - %(funcName)s:%(lineno)d - %(message)s'
+    datefmt: '%Y-%m-%d %H:%M:%S'
+
+  json:
+    class: pythonjsonlogger.jsonlogger.JsonFormatter
+    format: '%(asctime)s %(name)s %(levelname)s %(module)s %(funcName)s %(lineno)d %(message)s'
+    datefmt: '%Y-%m-%dT%H:%M:%S%z'
+    json_ensure_ascii: false
+
+  passthrough:
+    format: '%(message)s'
+
+# ============================================================================
+# HANDLERS
+# ============================================================================
+# Text handlers (default/detailed): Used when JSON_LOGS=false (dev/local)
+# *_json handlers (passthrough): For structlog loggers in production
+# *_json_structured handlers: For standard library loggers in production
+# ============================================================================
+
+handlers:
+  # ----- Console Handlers -----
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: default
+    stream: ext://sys.stdout
+
+  console_json:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: passthrough
+    stream: ext://sys.stdout
+
+  console_json_structured:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: json
+    stream: ext://sys.stdout
+
+  # ----- File Handlers (app.log) -----
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: /app/logs/app.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+  file_json:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: passthrough
+    filename: /app/logs/app.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+  file_json_structured:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: /app/logs/app.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+  # ----- Error File Handlers (error.log) -----
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: /app/logs/error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+  error_file_json:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: passthrough
+    filename: /app/logs/error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+  error_file_json_structured:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: json
+    filename: /app/logs/error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+# ============================================================================
+# LOGGERS
+# ============================================================================
+# Handler selection is dynamic based on JSON_LOGS setting (see logging.py)
+# - JSON_LOGS=false (dev): Uses text handlers (console, file, error_file)
+# - JSON_LOGS=true (prod): Uses JSON handlers (*_json, *_json_structured)
+# ============================================================================
+
+loggers:
+  # ----- ASGI Server Loggers -----
+  # Uvicorn (fallback compatibility)
+  uvicorn:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  uvicorn.error:
+    level: INFO
+    handlers: [console, error_file]
+    propagate: false
+
+  uvicorn.access:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # Granian server (uses _granian internally)
+  _granian:
+    level: INFO
+    handlers: [console, file, error_file]
+    propagate: false
+
+  granian.access:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # ----- Application Logger -----
+  app:
+    level: DEBUG
+    handlers: [console, file, error_file]
+    propagate: false
+
+  # ----- Database Loggers -----
+  sqlalchemy:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+
+  sqlalchemy.engine:
+    level: WARNING
+    handlers: [file]
+    propagate: false
+
+  # ----- External Services -----
+  httpx:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+
+  openai:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # ----- Framework Loggers -----
+  dbos:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  slowapi:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # ----- Development Utilities -----
+  # Suppress noisy watchfiles INFO logs when using --reload
+  watchfiles:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+# ============================================================================
+# ROOT LOGGER
+# ============================================================================
+root:
+  level: INFO
+  handlers: [console, file, error_file]

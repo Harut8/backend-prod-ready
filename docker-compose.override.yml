@@ -1,0 +1,35 @@
+# =============================================================================
+# prod-ready-backend - Development Override
+# Development-specific configurations and optimizations
+# This file is automatically merged by docker compose for development
+# WARNING: This file is ignored in production builds (be-docker-prod)
+# =============================================================================
+
+services:
+  # =============================================================================
+  # NGINX DEVELOPMENT OVERRIDES (enabled for load testing)
+  # =============================================================================
+  nginx:
+    restart: unless-stopped
+
+  # =============================================================================
+  # DEVELOPMENT BACKEND OVERRIDES
+  # =============================================================================
+  backend:
+    build:
+      target: development
+      args:
+        ENV_STAGE: development
+    environment:
+      - ENV_STAGE=development
+      - DEBUG=true
+      - LOG_LEVEL=debug
+      - RELOAD=true
+      - WATCHFILES_LOGGING=0
+    volumes:
+      - ./backend:/app/backend:rw
+      - /app/backend/__pycache__
+      - /app/backend/.pytest_cache
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # Debug port for IDE integration
