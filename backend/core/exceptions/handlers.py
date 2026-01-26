@@ -7,6 +7,7 @@ Re-exports handlers from error_to_response for cleaner imports.
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
 import structlog
 
 from backend.core.domain.exceptions import (
@@ -36,7 +37,76 @@ logger = structlog.get_logger(__name__)
 
 # These are async-compatible wrappers around the existing handlers
 validation_exception_handler = validation_exception
-http_exception_handler = not_found_exception
+
+
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """
+    Handle Starlette/FastAPI HTTPException.
+
+    Translates HTTPException to consistent error response format.
+    Provides descriptive messages including the requested path.
+    """
+    status_code = exc.status_code
+    detail = exc.detail or ""
+    path = request.url.path
+
+    # Map status codes to descriptive error responses
+    if status_code == 404:
+        logger.info(
+            "Resource not found",
+            path=path,
+            method=request.method,
+            client_host=request.client.host if request.client else None,
+        )
+        return JSONResponse(
+            status_code=404,
+            content={
+                "success": False,
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": f"The requested resource '{path}' was not found.",
+                    "context": {"path": path, "method": request.method},
+                },
+            },
+        )
+    elif status_code == 405:
+        logger.info(
+            "Method not allowed",
+            path=path,
+            method=request.method,
+            client_host=request.client.host if request.client else None,
+        )
+        return JSONResponse(
+            status_code=405,
+            content={
+                "success": False,
+                "error": {
+                    "code": "METHOD_NOT_ALLOWED",
+                    "message": f"Method '{request.method}' is not allowed for '{path}'.",
+                    "context": {"path": path, "method": request.method},
+                },
+            },
+        )
+    else:
+        # Generic HTTP error handling
+        logger.warning(
+            "HTTP error",
+            path=path,
+            method=request.method,
+            status_code=status_code,
+            detail=detail,
+            client_host=request.client.host if request.client else None,
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": False,
+                "error": {
+                    "code": f"HTTP_{status_code}",
+                    "message": str(detail) if detail else f"HTTP error {status_code}",
+                },
+            },
+        )
 
 
 # =============================================================================

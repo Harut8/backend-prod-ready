@@ -19,9 +19,9 @@ services:
     build:
       target: development
       args:
-        ENV_STAGE: development
+        ENV_STAGE: dev
     environment:
-      - ENV_STAGE=development
+      - ENV_STAGE=dev
       - DEBUG=true
       - LOG_LEVEL=debug
       - RELOAD=true

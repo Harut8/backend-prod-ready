@@ -10,6 +10,19 @@ from backend.core.utils.ids import safe_get_id_str
 
 logger = structlog.get_logger(__name__)
 
+# Fields that should never be logged
+SENSITIVE_FIELDS = frozenset({
+    "password",
+    "token",
+    "secret",
+    "api_key",
+    "authorization",
+    "access_token",
+    "refresh_token",
+    "credential",
+    "private_key",
+})
+
 
 class ServiceErrorHandler:
     def __init__(
@@ -38,13 +51,8 @@ class ServiceErrorHandler:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
-            except BaseException as e:
-                # Re-raise system exceptions immediately - don't handle them
-                if isinstance(e, (KeyboardInterrupt, SystemExit, GeneratorExit)):
-                    raise
-                # Handle all other exceptions (which are all Exception subclasses)
-                # Safe to cast since we filtered out non-Exception BaseExceptions above
-                return self._handle_exception(e, func, args, kwargs)  # type: ignore[arg-type]
+            except Exception as e:
+                return self._handle_exception(e, func, args, kwargs)
 
         return async_wrapper
 
@@ -53,13 +61,8 @@ class ServiceErrorHandler:
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return func(*args, **kwargs)
-            except BaseException as e:
-                # Re-raise system exceptions immediately - don't handle them
-                if isinstance(e, (KeyboardInterrupt, SystemExit, GeneratorExit)):
-                    raise
-                # Handle all other exceptions (which are all Exception subclasses)
-                # Safe to cast since we filtered out non-Exception BaseExceptions above
-                return self._handle_exception(e, func, args, kwargs)  # type: ignore[arg-type]
+            except Exception as e:
+                return self._handle_exception(e, func, args, kwargs)
 
         return sync_wrapper
 
@@ -71,43 +74,51 @@ class ServiceErrorHandler:
             if isinstance(exception, preserve_type):
                 raise exception
 
-        # Extract context for structured logging
-        _context = self._extract_context(args, kwargs)
-        _context.update({"function": func.__name__, "error": str(exception), "error_type": type(exception).__name__})
+        # Extract context for structured logging (excluding sensitive fields)
+        context = self._extract_context(args, kwargs)
+        context.update({
+            "function": func.__name__,
+            "error": str(exception),
+            "error_type": type(exception).__name__,
+        })
 
         # Log the error with appropriate level including full traceback for debugging
         if self._log_level == "exception":
-            # Use logger.exception to include full stack trace for debugging production issues
-            logger.exception("Service method failed", **_context, exc_info=exception)
+            logger.exception("Service method failed", **context, exc_info=exception)
         else:
-            _log_method = getattr(logger, self._log_level)
-            _log_method("Service method failed", **_context)
+            log_method = getattr(logger, self._log_level)
+            log_method("Service method failed", **context)
 
         # Map exception to appropriate domain exception
-        _target_exception = self._get_target_exception(exception)
-        raise _target_exception from exception
+        target_exception = self._get_target_exception(exception)
+        raise target_exception from exception
 
     def _extract_context(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
-        _context = {}
+        context: dict[str, Any] = {}
 
         # Try to extract context using configured extractors
         for field_name, extractor in self._context_extractors.items():
+            # Skip sensitive fields
+            if field_name.lower() in SENSITIVE_FIELDS:
+                continue
+
             try:
                 if args:
                     # For instance methods, args[0] is usually 'self', args[1] is first param
-                    _context[field_name] = extractor(args[1] if len(args) > 1 else args[0])
+                    context[field_name] = extractor(args[1] if len(args) > 1 else args[0])
                 elif kwargs:
-                    # Try to extract from kwargs if available
-                    for value in kwargs.values():
+                    # Try to extract from kwargs if available (skip sensitive keys)
+                    for key, value in kwargs.items():
+                        if key.lower() in SENSITIVE_FIELDS:
+                            continue
                         extracted = extractor(value)
                         if extracted:
-                            _context[field_name] = extracted
+                            context[field_name] = extracted
                             break
             except (IndexError, AttributeError, TypeError):
-                # Skip if extraction fails
                 continue
 
-        return _context
+        return context
 
     def _get_target_exception(self, exception: Exception) -> Exception:
         """Map source exception to target exception, preserving the error message.
@@ -118,21 +129,18 @@ class ServiceErrorHandler:
         Returns:
             An instance of the target exception with the original error message
         """
-        _error_message = str(exception)
+        error_message = str(exception)
 
         # Check specific exception mappings first
         for source_type, target_type in self._exception_map.items():
             if isinstance(exception, source_type):
-                # Try to pass the message to preserve context
                 try:
-                    return target_type(message=_error_message)  # type: ignore[call-arg]
+                    return target_type(message=error_message)  # type: ignore[call-arg]
                 except TypeError:
-                    # If the exception doesn't accept message parameter, create without it
                     return target_type()
 
         # Return default exception with original message if no mapping found
         try:
-            return self._default_exception(message=_error_message)  # type: ignore[call-arg]
+            return self._default_exception(message=error_message)  # type: ignore[call-arg]
         except TypeError:
-            # If the exception doesn't accept message parameter, create without it
             return self._default_exception()

@@ -20,24 +20,56 @@ from backend.core.conf.settings import SETTINGS
 logger = structlog.get_logger(__name__)
 
 
-@lru_cache(maxsize=1)
-def _get_trusted_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+class ConfigurationError(Exception):
+    """Raised when security-critical configuration is invalid."""
+
+
+def _parse_trusted_networks(
+    cidrs: tuple[str, ...],
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
     """
-    Parse and cache trusted proxy CIDR networks.
+    Parse trusted proxy CIDR networks.
+
+    Args:
+        cidrs: Tuple of CIDR strings to parse (hashable for caching).
 
     Returns:
         Tuple of parsed network objects for efficient IP matching.
+
+    Raises:
+        ConfigurationError: If any CIDR is invalid. Fails fast on startup
+            to prevent security misconfigurations from going unnoticed.
     """
-    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    _networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
 
-    for cidr in SETTINGS.RATE_LIMIT.TRUSTED_PROXY_CIDRS:
+    for _cidr in cidrs:
         try:
-            network = ipaddress.ip_network(cidr, strict=False)
-            networks.append(network)
+            _network = ipaddress.ip_network(_cidr, strict=False)
+            _networks.append(_network)
         except ValueError as e:
-            logger.warning("Invalid CIDR in TRUSTED_PROXY_CIDRS", cidr=cidr, error=str(e))
+            _msg = f"Invalid CIDR '{_cidr}' in TRUSTED_PROXY_CIDRS: {e}"
+            logger.error("Security configuration error", cidr=_cidr, error=str(e))
+            raise ConfigurationError(_msg) from e
 
-    return tuple(networks)
+    return tuple(_networks)
+
+
+@lru_cache(maxsize=1)
+def _get_trusted_networks_cached(
+    cidrs: tuple[str, ...],
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """
+    Cached wrapper for parsing trusted networks.
+
+    The cache key is the tuple of CIDRs, so cache invalidates automatically
+    if configuration changes.
+    """
+    return _parse_trusted_networks(cidrs)
+
+
+def _get_trusted_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """Get trusted networks with proper cache key from current settings."""
+    return _get_trusted_networks_cached(tuple(SETTINGS.RATE_LIMIT.TRUSTED_PROXY_CIDRS))
 
 
 def is_trusted_proxy(ip: str) -> bool:
@@ -103,29 +135,65 @@ def extract_client_ip_secure(
 
     # Parse the X-Forwarded-For header
     # Format: "client, proxy1, proxy2, ..." - leftmost is original client
-    ips = [ip.strip() for ip in x_forwarded_for.split(",")]
+    _ips = [ip.strip() for ip in x_forwarded_for.split(",")]
 
-    if not ips:
+    if not _ips:
         return direct_ip
 
-    # The first IP in X-Forwarded-For is the original client
-    # (when there's a single trusted proxy layer)
-    client_ip = ips[0]
+    # Walk from right to left to find the rightmost non-trusted-proxy IP
+    # This handles multi-layer proxy chains (CDN -> Load Balancer -> App)
+    # where each trusted proxy appends the previous hop's IP to the header.
+    #
+    # Example with Cloudflare -> AWS ALB -> App:
+    #   X-Forwarded-For: "attacker_spoofed, real_client_ip, cloudflare_ip"
+    #   Direct IP: alb_ip (trusted)
+    #
+    # Walking right-to-left:
+    #   - cloudflare_ip is trusted -> skip
+    #   - real_client_ip is NOT trusted -> this is the client
+    #
+    # This prevents attackers from prepending spoofed IPs to bypass rate limits.
+    for _ip in reversed(_ips):
+        _ip = _ip.strip()
+        if not _ip:
+            continue
 
-    # Validate the extracted IP format
+        # Validate IP format
+        try:
+            ipaddress.ip_address(_ip)
+        except ValueError:
+            logger.warning(
+                "Invalid IP in X-Forwarded-For header",
+                x_forwarded_for=x_forwarded_for,
+                invalid_ip=_ip,
+            )
+            continue
+
+        # Return the first non-trusted-proxy IP from the right
+        if not is_trusted_proxy(_ip):
+            logger.debug(
+                "Extracted client IP from trusted proxy chain",
+                client_ip=_ip,
+                direct_ip=direct_ip,
+                x_forwarded_for=x_forwarded_for,
+            )
+            return _ip
+
+    # All IPs in the chain are trusted proxies - use the leftmost
+    # This handles edge cases like internal health checks
+    _client_ip = _ips[0].strip()
     try:
-        ipaddress.ip_address(client_ip)
+        ipaddress.ip_address(_client_ip)
+        logger.debug(
+            "All IPs in chain are trusted, using leftmost",
+            client_ip=_client_ip,
+            direct_ip=direct_ip,
+        )
+        return _client_ip
     except ValueError:
         logger.warning(
-            "Invalid IP in X-Forwarded-For header",
+            "Invalid leftmost IP in X-Forwarded-For header",
             x_forwarded_for=x_forwarded_for,
-            extracted_ip=client_ip,
+            extracted_ip=_client_ip,
         )
         return direct_ip
-
-    logger.debug(
-        "Extracted client IP from trusted proxy",
-        client_ip=client_ip,
-        direct_ip=direct_ip,
-    )
-    return client_ip

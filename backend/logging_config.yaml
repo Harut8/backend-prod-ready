@@ -27,6 +27,10 @@ formatters:
   passthrough:
     format: '%(message)s'
 
+  # Structlog-style formatter for stdlib loggers (slowapi, etc.)
+  structlog_console:
+    (): backend.core.observability.logging.StructlogStyleFormatter
+
 # ============================================================================
 # HANDLERS
 # ============================================================================
@@ -41,6 +45,20 @@ handlers:
     class: logging.StreamHandler
     level: INFO
     formatter: default
+    stream: ext://sys.stdout
+
+  # Structlog-style console for stdlib loggers (uvicorn, slowapi, etc.)
+  console_structlog:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: structlog_console
+    stream: ext://sys.stdout
+
+  # Passthrough console for structlog loggers (output already formatted)
+  console_passthrough:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: passthrough
     stream: ext://sys.stdout
 
   console_json:
@@ -124,40 +142,40 @@ loggers:
   # Uvicorn (fallback compatibility)
   uvicorn:
     level: INFO
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   uvicorn.error:
     level: INFO
-    handlers: [console, error_file]
+    handlers: [console_structlog, error_file]
     propagate: false
 
   uvicorn.access:
     level: INFO
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   # Granian server (uses _granian internally)
   _granian:
     level: INFO
-    handlers: [console, file, error_file]
+    handlers: [console_structlog, file, error_file]
     propagate: false
 
   granian.access:
     level: INFO
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   # ----- Application Logger -----
   app:
     level: DEBUG
-    handlers: [console, file, error_file]
+    handlers: [console_structlog, file, error_file]
     propagate: false
 
   # ----- Database Loggers -----
   sqlalchemy:
     level: WARNING
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   sqlalchemy.engine:
@@ -168,35 +186,37 @@ loggers:
   # ----- External Services -----
   httpx:
     level: WARNING
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   openai:
     level: INFO
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   # ----- Framework Loggers -----
   dbos:
     level: INFO
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   slowapi:
     level: INFO
-    handlers: [console, file]
+    handlers: [console_structlog, file]
     propagate: false
 
   # ----- Development Utilities -----
   # Suppress noisy watchfiles INFO logs when using --reload
   watchfiles:
     level: WARNING
-    handlers: [console]
+    handlers: [console_structlog]
     propagate: false
 
 # ============================================================================
 # ROOT LOGGER
 # ============================================================================
+# All loggers use ProcessorFormatter (console_structlog) for consistent output
+# ProcessorFormatter handles both structlog and stdlib logs uniformly
 root:
   level: INFO
-  handlers: [console, file, error_file]
+  handlers: [console_structlog, file, error_file]

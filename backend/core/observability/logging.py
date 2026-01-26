@@ -3,14 +3,68 @@ import logging
 import logging.config
 from pathlib import Path
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from structlog.stdlib import LoggerFactory
 from structlog.types import EventDict, WrappedLogger
 import yaml  # type: ignore [import-untyped]
 
-from backend.core.conf.settings import SETTINGS
+if TYPE_CHECKING:
+    from backend.core.conf.settings import Settings
+
+
+def _get_settings() -> "Settings":
+    """Lazy-load settings to avoid circular imports and ensure logging is configured first."""
+    from backend.core.conf.settings import SETTINGS  # noqa: PLC0415
+
+    return SETTINGS
+
+
+def _get_structlog_formatter(*, use_json: bool = False) -> structlog.stdlib.ProcessorFormatter:
+    """
+    Create a ProcessorFormatter for stdlib logging that matches structlog output.
+
+    Uses foreign_pre_chain to process logs from standard library sources
+    so they have the same format as structlog logs.
+    """
+    # Shared processors used by both structlog and stdlib logs
+    shared_processors: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.UnicodeDecoder(),
+    ]
+
+    return structlog.stdlib.ProcessorFormatter(
+        # foreign_pre_chain processes logs from stdlib loggers (uvicorn, slowapi, etc.)
+        foreign_pre_chain=shared_processors,
+        # processors handles final rendering for all log entries
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer() if use_json else structlog.dev.ConsoleRenderer(),
+        ],
+    )
+
+
+# Backwards compatibility alias for YAML config
+class StructlogStyleFormatter(logging.Formatter):
+    """
+    Wrapper for structlog's ProcessorFormatter for use in logging config.
+
+    This allows the YAML logging config to reference this class.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Create the real formatter
+        self._formatter = _get_structlog_formatter(use_json=False)
+
+    def format(self, record: logging.LogRecord) -> str:
+        return self._formatter.format(record)
 
 
 # Context variables for request/user tracking
@@ -27,6 +81,44 @@ def get_request_id() -> str | None:
 def get_user_id() -> str | None:
     """Get the current user ID from context."""
     return user_id_ctx_var.get()
+
+
+def _get_log_directory() -> Path:
+    """Get the appropriate log directory based on environment.
+
+    For Docker (prod): /app/logs/
+    For local development: backend/logs/ (created if needed)
+    """
+    docker_logs_path = Path("/app/logs")
+
+    # Check if we're running in Docker (the /app/logs directory exists or we can create it)
+    if docker_logs_path.exists() or _get_settings().APP.ENVIRONMENT == "prod":
+        return docker_logs_path
+
+    # Local development: use a logs directory in the backend folder
+    backend_dir = Path(__file__).parent.parent.parent
+    local_logs_path = backend_dir / "logs"
+    local_logs_path.mkdir(exist_ok=True)
+    return local_logs_path
+
+
+def _adjust_log_paths(config: dict[str, Any]) -> dict[str, Any]:
+    """Adjust log file paths based on the current environment.
+
+    Replaces hardcoded /app/logs/ paths with environment-appropriate paths.
+    """
+    log_dir = _get_log_directory()
+
+    handlers = config.get("handlers", {})
+    for handler_name, handler_config in handlers.items():
+        if "filename" in handler_config:
+            original_path = Path(handler_config["filename"])
+            # Replace /app/logs/ with the appropriate directory
+            if str(original_path).startswith("/app/logs/"):
+                new_path = log_dir / original_path.name
+                handler_config["filename"] = str(new_path)
+
+    return config
 
 
 def _load_logging_config() -> dict[str, Any]:
@@ -172,48 +264,71 @@ def configure_logging() -> None:
     """
     Configure logging for the application.
 
-    Loads logging_config.yaml and dynamically selects handlers based on:
-    - Environment: Production uses JSON, dev/local uses text
-    - JSON_LOGS setting: Explicit override if set
-    """
-    # Determine format preference: JSON for prod, text for dev/local
-    # JSON_LOGS setting takes precedence, but defaults based on environment
-    use_json = SETTINGS.APP.JSON_LOGS
+    Uses structlog's ProcessorFormatter to ensure consistent output format
+    for both structlog and stdlib loggers (uvicorn, slowapi, etc.).
 
-    # Configure structlog first (before standard logging)
+    IMPORTANT: Sets up basic logging BEFORE importing settings
+    to ensure all logs (including settings validation) are properly formatted.
+    """
+    # Step 1: Configure structlog processors first (needed by ProcessorFormatter)
+    _shared_processors: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        add_request_id_processor,
+        add_user_id_processor,
+    ]
+
     structlog.configure(
-        processors=[
-            structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            # Add request_id and user_id to all log entries
-            add_request_id_processor,
-            add_user_id_processor,
-            structlog.processors.JSONRenderer() if use_json else structlog.dev.ConsoleRenderer(),
+        processors=_shared_processors + [
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
-        context_class=dict,
+        logger_factory=LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=False,  # Don't cache yet - we may reconfigure
+    )
+
+    # Step 2: Set up stdlib logging with ProcessorFormatter
+    # This ensures settings validation logs use structlog-style formatting
+    logging.root.handlers.clear()
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(_get_structlog_formatter(use_json=False))
+    logging.root.addHandler(_handler)
+    logging.root.setLevel(logging.DEBUG)  # Allow all levels, handlers filter
+
+    # Step 3: Now import settings (this triggers settings validation logs)
+    settings = _get_settings()
+
+    # Step 4: Determine final format preference based on settings
+    use_json = settings.APP.JSON_LOGS
+
+    # Step 5: Reconfigure structlog with final settings and enable caching
+    structlog.configure(
+        processors=_shared_processors + [
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
         logger_factory=LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
 
-    # Load and configure standard library logging from YAML
+    # Step 6: Load and configure full stdlib logging from YAML
     try:
         config = _load_logging_config()
+        config = _adjust_log_paths(config)
         config = _apply_logging_format(config, use_json=use_json)
         logging.config.dictConfig(config)
     except (FileNotFoundError, yaml.YAMLError, KeyError, ValueError) as e:
         # Fallback to basic config if YAML loading fails
-        # This ensures the app can still start even if logging config has issues
         logging.basicConfig(
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             stream=sys.stdout,
-            level=getattr(logging, SETTINGS.APP.LOG_LEVEL.upper(), logging.INFO),
+            level=getattr(logging, settings.APP.LOG_LEVEL.upper(), logging.INFO),
         )
         # Log the error using structlog (which should be configured by now)
         logger = structlog.get_logger(__name__)

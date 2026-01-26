@@ -3,7 +3,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -45,7 +45,12 @@ def _convert_async_url_to_sync(async_url: str) -> str:
 
 
 class PgAsyncSQLAlchemyAdapter:
-    """PostgreSQL async adapter with connection pooling and timeout handling."""
+    """PostgreSQL async adapter with connection pooling and timeout handling.
+
+    Uses lazy initialization pattern - engines are created on first access
+    rather than during construction. This prevents blocking the event loop
+    and allows proper startup health checks.
+    """
 
     def __init__(self, url: str, *, echo: bool = False, logger: structlog.stdlib.BoundLogger | None = None) -> None:
         self._url = url
@@ -56,7 +61,7 @@ class PgAsyncSQLAlchemyAdapter:
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
         self._async_scoped_session: async_scoped_session[AsyncSession] | None = None
         self._logger = logger
-        self.connect()
+        self._initialized = False
 
     @timeout(10.0)
     @database_error_handler
@@ -65,9 +70,15 @@ class PgAsyncSQLAlchemyAdapter:
             await self._engine.dispose()
         if self._sync_engine:
             self._sync_engine.dispose()
+        self._initialized = False
+
+    def _ensure_initialized(self) -> None:
+        """Ensure engines are initialized. Called lazily on first access."""
+        if not self._initialized:
+            self._connect_sync()
 
     @database_error_handler
-    def connect(self) -> None:
+    def _connect_sync(self) -> None:
         self._engine = create_async_engine(
             url=self._url,
             echo=self._echo,
@@ -117,8 +128,28 @@ class PgAsyncSQLAlchemyAdapter:
         )
 
         self._setup_event_listeners()
+        self._initialized = True
         if self._logger:
             self._logger.info("Connected to Postgres database")
+
+    async def initialize(self) -> None:
+        """Explicitly initialize database connections during app startup.
+
+        This method should be called during application startup to ensure
+        database connections are established before handling requests.
+        Allows for proper health checks and graceful failure handling.
+        """
+        if self._initialized:
+            return
+
+        self._connect_sync()
+
+        # Verify async connection works
+        if self._engine:
+            async with self._engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            if self._logger:
+                self._logger.info("Database connection verified")
 
     def _setup_event_listeners(self) -> None:
         if self._engine is None:
@@ -151,6 +182,7 @@ class PgAsyncSQLAlchemyAdapter:
 
     @property
     def async_scoped_session(self) -> async_scoped_session[AsyncSession]:
+        self._ensure_initialized()
         if self._async_scoped_session is None:
             msg = "Database connection not initialized"
             raise RuntimeError(msg)
@@ -158,6 +190,7 @@ class PgAsyncSQLAlchemyAdapter:
 
     @property
     def engine(self) -> AsyncEngine:
+        self._ensure_initialized()
         if self._engine is None:
             msg = "Database engine not initialized"
             raise RuntimeError(msg)
@@ -165,6 +198,7 @@ class PgAsyncSQLAlchemyAdapter:
 
     @property
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        self._ensure_initialized()
         if self._session_factory is None:
             msg = "Database session factory not initialized"
             raise RuntimeError(msg)
@@ -172,6 +206,7 @@ class PgAsyncSQLAlchemyAdapter:
 
     @property
     def sync_engine(self) -> Engine:
+        self._ensure_initialized()
         if self._sync_engine is None:
             msg = "Sync database engine not initialized"
             raise RuntimeError(msg)
@@ -179,6 +214,7 @@ class PgAsyncSQLAlchemyAdapter:
 
     @property
     def sync_session_factory(self) -> sessionmaker[Session]:
+        self._ensure_initialized()
         if self._sync_session_factory is None:
             msg = "Sync database session factory not initialized"
             raise RuntimeError(msg)

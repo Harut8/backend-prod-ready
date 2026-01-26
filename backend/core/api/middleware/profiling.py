@@ -22,6 +22,7 @@ Environment Variables:
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import hmac
 from pathlib import Path
 import random
 import time
@@ -130,15 +131,14 @@ async def _save_profile_locally(
         _html_data = profiler.output_html()
 
         # Run file I/O in thread pool to avoid blocking
-        _loop = asyncio.get_event_loop()
+        _loop = asyncio.get_running_loop()
         await _loop.run_in_executor(None, lambda: _json_path.write_text(_speedscope_data, encoding="utf-8"))
-
         await _loop.run_in_executor(None, lambda: _html_path.write_text(_html_data, encoding="utf-8"))
 
         # Periodically cleanup old profiles (async, don't wait)
         if random.random() < 0.01:  # 1% chance to trigger cleanup
             # Fire-and-forget background task for cleanup in thread pool
-            asyncio.get_event_loop().run_in_executor(None, _cleanup_old_profiles)
+            asyncio.get_running_loop().run_in_executor(None, _cleanup_old_profiles)
 
     except OSError as e:
         logger.warning("Failed to save profile", error=str(e), path=request.url.path)
@@ -161,10 +161,11 @@ def _should_profile_request(request: Request) -> bool:
     if not SETTINGS.PROFILING.PROFILING_ENABLED:
         return False
 
-    # Check header authorization if required
+    # Check header authorization if required (timing-safe comparison)
     if SETTINGS.PROFILING.REQUIRE_PROFILE_HEADER:
-        _header_token = request.headers.get("X-Profile-Token")
-        if _header_token != SETTINGS.PROFILING.PROFILE_HEADER_TOKEN.get_secret_value():
+        _header_token = request.headers.get("X-Profile-Token") or ""
+        _expected_token = SETTINGS.PROFILING.PROFILE_HEADER_TOKEN.get_secret_value()
+        if not hmac.compare_digest(_header_token, _expected_token):
             return False
 
     # Explicit query param always enables profiling
@@ -233,7 +234,8 @@ async def profiling_middleware(
         # Add headers indicating profiling occurred and where to find results
         response.headers["X-Profiled"] = "true"
         response.headers["X-Profile-Duration-Ms"] = f"{_duration_ms:.2f}"
-        if _html_path is not None:
+        # Only expose internal path in non-production environments
+        if _html_path is not None and SETTINGS.APP.ENVIRONMENT != "prod":
             response.headers["X-Profile-Path"] = str(_html_path.relative_to(PROFILE_DIR.parent))
 
         # Log profile location

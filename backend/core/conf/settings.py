@@ -1,5 +1,4 @@
 from functools import lru_cache
-import logging
 import os
 from pathlib import Path
 import re
@@ -10,6 +9,7 @@ from typing import Any, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, PostgresDsn, RedisDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import structlog
 
 
 # Determine which environment file to use based on ENV_STAGE environment variable
@@ -100,6 +100,28 @@ class PgDbSettings(AppSettings):
     POSTGRES_PORT: int = Field(default=5432, alias="POSTGRES_PORT")
     DATABASE_URL: PostgresDsn | str = Field(default="", alias="DATABASE_URL")
 
+    # Connection pool settings
+    DB_POOL_SIZE: int = Field(
+        default=10,
+        alias="DB_POOL_SIZE",
+        description="Number of connections to keep in the pool",
+    )
+    DB_MAX_OVERFLOW: int = Field(
+        default=20,
+        alias="DB_MAX_OVERFLOW",
+        description="Max additional connections when pool is exhausted",
+    )
+    DB_POOL_TIMEOUT: int = Field(
+        default=30,
+        alias="DB_POOL_TIMEOUT",
+        description="Seconds to wait for a connection from the pool",
+    )
+    DB_POOL_RECYCLE: int = Field(
+        default=1800,
+        alias="DB_POOL_RECYCLE",
+        description="Seconds after which a connection is recycled (30 min default)",
+    )
+
     # Circuit breaker settings for database operations
     DB_CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = Field(
         default=20,
@@ -117,9 +139,7 @@ class PgDbSettings(AppSettings):
     def validate_postgres_dsn(cls, data: dict[str, Any]) -> dict[str, Any]:
         if not data.get("DATABASE_URL"):
             # Use environment variables or defaults
-            host = data.get("POSTGRES_HOST", "postgres")
-            if host == "localhost":
-                host = "postgres"
+            host = data.get("POSTGRES_HOST", "localhost")
             _built_uri = PostgresDsn.build(
                 scheme=data.setdefault("POSTGRES_ENGINE", "postgresql+asyncpg"),
                 username=data.setdefault("POSTGRES_USER", "trainer_user"),
@@ -175,6 +195,22 @@ class CacheSettings(CustomSettings):
     USER_CACHE_TTL_MINUTES: int = Field(default=30, alias="USER_CACHE_TTL_MINUTES")
 
 
+class ExternalAPISettings(CustomSettings):
+    """Settings for external API integrations (Telegram, payment providers, etc.)."""
+
+    # Circuit breaker settings for external API calls
+    EXTERNAL_API_CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = Field(
+        default=5,
+        alias="EXTERNAL_API_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+        description="Consecutive external API failures before opening circuit breaker",
+    )
+    EXTERNAL_API_CIRCUIT_BREAKER_RESET_TIMEOUT: int = Field(
+        default=60,
+        alias="EXTERNAL_API_CIRCUIT_BREAKER_RESET_TIMEOUT",
+        description="Seconds to wait before attempting to close circuit breaker (half-open state)",
+    )
+
+
 class RateLimitSettings(CustomSettings):
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = Field(default=60, alias="RATE_LIMIT_REQUESTS_PER_MINUTE")
     RATE_LIMIT_ENABLED: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")  # Disable for load testing
@@ -182,6 +218,24 @@ class RateLimitSettings(CustomSettings):
     # Trusted proxy CIDR ranges for secure X-Forwarded-For handling
     # These are the IP ranges of your reverse proxies (nginx, AWS ALB, Cloudflare, etc.)
     # Only requests from these IPs will have their X-Forwarded-For headers trusted
+    #
+    # SECURITY WARNING: The default ranges include broad private networks for development.
+    # For production deployments, you SHOULD narrow these to your specific infrastructure:
+    #
+    # Example configurations by deployment type:
+    #
+    # AWS ALB only:
+    #   TRUSTED_PROXY_CIDRS=["10.0.0.0/16"]  # Your VPC CIDR only
+    #
+    # AWS ALB + Cloudflare:
+    #   TRUSTED_PROXY_CIDRS=["10.0.0.0/16", "173.245.48.0/20", "103.21.244.0/22", ...]
+    #
+    # Kubernetes (internal):
+    #   TRUSTED_PROXY_CIDRS=["10.244.0.0/16"]  # Your pod CIDR only
+    #
+    # Direct nginx (no proxy):
+    #   TRUSTED_PROXY_CIDRS=["127.0.0.1/32"]  # Localhost only
+    #
     TRUSTED_PROXY_CIDRS: list[str] = Field(
         default=[
             # Localhost (for development)
@@ -193,11 +247,13 @@ class RateLimitSettings(CustomSettings):
             "172.18.0.0/16",
             "172.19.0.0/16",
             # Private networks (commonly used for internal load balancers)
+            # WARNING: These are broad defaults - narrow for production!
             "10.0.0.0/8",
             "192.168.0.0/16",
             # AWS ALB health check IPs (VPC internal)
             # Add your specific ALB subnet CIDRs in production
             # Cloudflare IPs (uncomment if using Cloudflare)
+            # See: https://www.cloudflare.com/ips/
             # "173.245.48.0/20",
             # "103.21.244.0/22",
             # "103.22.200.0/22",
@@ -215,7 +271,7 @@ class RateLimitSettings(CustomSettings):
             # "131.0.72.0/22",
         ],
         alias="TRUSTED_PROXY_CIDRS",
-        description="CIDR ranges of trusted reverse proxies for X-Forwarded-For validation",
+        description="CIDR ranges of trusted reverse proxies for X-Forwarded-For validation. Narrow for production!",
     )
 
 
@@ -449,31 +505,6 @@ class TimeoutSettings(CustomSettings):
     )
 
 
-class AuditSettings(CustomSettings):
-    """Configuration for audit logging."""
-
-    AUDIT_ENABLED: bool = Field(
-        default=False,
-        alias="AUDIT_ENABLED",
-        description="Enable/disable audit logging to database",
-    )
-    AUDIT_LOG_TO_STDOUT: bool = Field(
-        default=True,
-        alias="AUDIT_LOG_TO_STDOUT",
-        description="Also log audit events to stdout via structlog",
-    )
-    AUDIT_RETENTION_DAYS: int = Field(
-        default=90,
-        alias="AUDIT_RETENTION_DAYS",
-        description="Days to retain audit logs in database",
-    )
-    AUDIT_SENSITIVE_FIELDS: list[str] = Field(
-        default_factory=lambda: ["password", "token", "secret", "api_key", "credit_card"],
-        alias="AUDIT_SENSITIVE_FIELDS",
-        description="Field names to redact in audit logs",
-    )
-
-
 class Settings(BaseModel):
     APP: AppSettings = Field(default_factory=AppSettings)
     DATABASE: PgDbSettings = Field(default_factory=PgDbSettings)
@@ -483,12 +514,12 @@ class Settings(BaseModel):
     CACHE: CacheSettings = Field(default_factory=CacheSettings)
     REDIS: RedisSettings = Field(default_factory=RedisSettings)
     RATE_LIMIT: RateLimitSettings = Field(default_factory=RateLimitSettings)
+    EXTERNAL_API: ExternalAPISettings = Field(default_factory=ExternalAPISettings)
     ADMIN: AdminSettings = Field(default_factory=AdminSettings)
     GEOIP: GeoIPSettings = Field(default_factory=GeoIPSettings)
     PROFILING: ProfilingSettings = Field(default_factory=ProfilingSettings)
     METRICS: MetricsSettings = Field(default_factory=MetricsSettings)
     TRACING: TracingSettings = Field(default_factory=TracingSettings)
-    AUDIT: AuditSettings = Field(default_factory=AuditSettings)
     TIMEOUTS: TimeoutSettings = Field(default_factory=TimeoutSettings)
 
     @model_validator(mode="after")
@@ -517,10 +548,10 @@ class Settings(BaseModel):
         """Enforce strong password policy for admin access in production."""
         # Only enforce strict validation in production environment
         if self.APP.ENVIRONMENT != "prod":
-            # Use standard logging to avoid structlog dependency before configuration
-            logging.getLogger(__name__).warning(
+            # structlog is configured before settings.py is imported
+            structlog.get_logger(__name__).warning(
                 "Admin password validation skipped - not in production environment",
-                extra={"environment": self.APP.ENVIRONMENT},
+                environment=self.APP.ENVIRONMENT,
             )
             return self
 

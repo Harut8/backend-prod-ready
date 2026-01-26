@@ -68,14 +68,14 @@ services:
       dockerfile: app.Dockerfile
       target: runtime
       args:
-        ENV_STAGE: production
+        ENV_STAGE: prod
     restart: always
     # Remove direct port exposure - only accessible via Nginx
     ports: []
     expose:
       - "8000"
     environment:
-      - ENV_STAGE=production
+      - ENV_STAGE=prod
       - FORWARDED_ALLOW_IPS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
       - RATE_LIMIT_ENABLED=true
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}

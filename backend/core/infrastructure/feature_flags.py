@@ -50,6 +50,10 @@ class FeatureFlagService:
     Features are enabled by default unless explicitly disabled.
     This fail-open behavior ensures features work even if Redis is unavailable.
 
+    TTL Behavior:
+    - Kill switches (MAINTENANCE_MODE, critical flags): Never expire (persistent=True)
+    - Temporary flags (A/B tests, gradual rollouts): Expire after TEMPORARY_TTL
+
     Usage:
         flags = FeatureFlagService(cache_service)
 
@@ -58,12 +62,25 @@ class FeatureFlagService:
         else:
             logger.info("Paddle webhooks disabled via feature flag")
 
-        # Disable a feature (kill switch)
+        # Disable a feature (kill switch) - persists until explicitly cleared
         await flags.set_flag(FeatureFlag.PADDLE_WEBHOOKS_ENABLED, enabled=False)
+
+        # Temporary flag with TTL (e.g., for gradual rollout)
+        await flags.set_flag(FeatureFlag.NEW_FEATURE, enabled=True, persistent=False)
     """
 
     CACHE_PREFIX = "feature_flag"
-    DEFAULT_TTL = 3600  # 1 hour cache for flag values
+    TEMPORARY_TTL = 3600  # 1 hour for non-critical temporary flags
+
+    # Critical flags that should never auto-expire (kill switches)
+    CRITICAL_FLAGS: frozenset[FeatureFlag] = frozenset({
+        FeatureFlag.PADDLE_WEBHOOKS_ENABLED,
+        FeatureFlag.STRIPE_WEBHOOKS_ENABLED,
+        FeatureFlag.SUBSCRIPTION_RENEWALS_ENABLED,
+        FeatureFlag.MAINTENANCE_MODE,
+        FeatureFlag.READ_ONLY_MODE,
+        FeatureFlag.RATE_LIMITING_ENABLED,
+    })
 
     def __init__(self, cache_service: CacheService) -> None:
         self._cache = cache_service
@@ -71,6 +88,10 @@ class FeatureFlagService:
     def _build_key(self, flag: FeatureFlag) -> str:
         """Build the cache key for a feature flag."""
         return f"{self.CACHE_PREFIX}:{flag.value}"
+
+    # Valid flag values for explicit validation
+    TRUTHY_VALUES: frozenset[str] = frozenset({"true", "1", "yes", "enabled"})
+    FALSY_VALUES: frozenset[str] = frozenset({"false", "0", "no", "disabled"})
 
     async def is_enabled(self, flag: FeatureFlag, *, default: bool = True) -> bool:
         """
@@ -91,10 +112,26 @@ class FeatureFlagService:
             logger.debug("Feature flag not set, using default", flag=flag.value, default=default)
             return default
 
-        # Parse the stored value
-        _enabled = _value.lower() in ("true", "1", "yes", "enabled")
-        logger.debug("Feature flag checked", flag=flag.value, enabled=_enabled)
-        return _enabled
+        # Validate and parse the stored value
+        _normalized = _value.lower().strip()
+
+        if _normalized in self.TRUTHY_VALUES:
+            logger.debug("Feature flag checked", flag=flag.value, enabled=True)
+            return True
+
+        if _normalized in self.FALSY_VALUES:
+            logger.debug("Feature flag checked", flag=flag.value, enabled=False)
+            return False
+
+        # Invalid value - log warning and use default
+        logger.warning(
+            "Invalid feature flag value, using default",
+            flag=flag.value,
+            value=_value,
+            default=default,
+            valid_values=list(self.TRUTHY_VALUES | self.FALSY_VALUES),
+        )
+        return default
 
     async def is_disabled(self, flag: FeatureFlag, *, default: bool = True) -> bool:
         """
@@ -104,22 +141,34 @@ class FeatureFlagService:
         """
         return not await self.is_enabled(flag, default=default)
 
-    async def set_flag(self, flag: FeatureFlag, *, enabled: bool) -> None:
+    async def set_flag(self, flag: FeatureFlag, *, enabled: bool, persistent: bool | None = None) -> None:
         """
         Set a feature flag value.
 
         Args:
             flag: The feature flag to set
             enabled: Whether the feature should be enabled
+            persistent: If True, flag never expires. If False, uses TEMPORARY_TTL.
+                       If None (default), critical flags are persistent, others use TTL.
         """
         _key = self._build_key(flag)
         _value = "true" if enabled else "false"
-        await self._cache.set(_key, _value, ttl=self.DEFAULT_TTL)
+
+        # Determine TTL based on flag criticality
+        if persistent is None:
+            # Auto-detect: critical flags are persistent by default
+            _is_critical = flag in self.CRITICAL_FLAGS
+            _ttl = None if _is_critical else self.TEMPORARY_TTL
+        else:
+            _ttl = None if persistent else self.TEMPORARY_TTL
+
+        await self._cache.set(_key, _value, ttl=_ttl)
 
         logger.info(
             "Feature flag updated",
             flag=flag.value,
             enabled=enabled,
+            persistent=_ttl is None,
         )
 
     async def clear_flag(self, flag: FeatureFlag) -> None:

@@ -1,6 +1,9 @@
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
+import fnmatch
 import hashlib
+import time
 from typing import Any, TypeVar, cast
 
 import orjson
@@ -17,15 +20,123 @@ from backend.core.security.circuit_breaker import (
 logger = structlog.get_logger(__name__)
 
 
+# =============================================================================
+# In-Memory Cache (Fallback for local/dev)
+# =============================================================================
+
+
+class InMemoryCache:
+    """Simple in-memory cache with TTL support.
+
+    Used as fallback when Redis is unavailable in local/dev environments.
+    NOT suitable for production with multiple workers/instances.
+    """
+
+    def __init__(self, max_size: int = 10000) -> None:
+        self._cache: dict[str, tuple[Any, float | None]] = {}  # key -> (value, expiry_timestamp)
+        self._max_size = max_size
+        self._lock = asyncio.Lock()
+
+    def _is_expired(self, expiry: float | None) -> bool:
+        """Check if entry has expired."""
+        if expiry is None:
+            return False
+        return time.time() > expiry
+
+    async def _cleanup_expired(self) -> None:
+        """Remove expired entries (called periodically)."""
+        now = time.time()
+        expired_keys = [k for k, (_, exp) in self._cache.items() if exp and now > exp]
+        for key in expired_keys:
+            self._cache.pop(key, None)
+
+    async def get(self, key: str) -> str | None:
+        """Get value from cache."""
+        async with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+            value, expiry = entry
+            if self._is_expired(expiry):
+                del self._cache[key]
+                return None
+            return cast("str | None", value)
+
+    async def set(self, key: str, value: str, ttl: int | None = None) -> bool:
+        """Set value in cache with optional TTL."""
+        async with self._lock:
+            # Evict oldest entries if at capacity
+            if len(self._cache) >= self._max_size:
+                await self._cleanup_expired()
+                # If still at capacity, remove 10% oldest entries
+                if len(self._cache) >= self._max_size:
+                    keys_to_remove = list(self._cache.keys())[: self._max_size // 10]
+                    for k in keys_to_remove:
+                        del self._cache[k]
+
+            expiry = time.time() + ttl if ttl else None
+            self._cache[key] = (value, expiry)
+            return True
+
+    async def setnx(self, key: str, value: str, ttl: int | None = None) -> bool:
+        """Set value only if key doesn't exist."""
+        async with self._lock:
+            entry = self._cache.get(key)
+            if entry is not None:
+                _, expiry = entry
+                if not self._is_expired(expiry):
+                    return False
+            expiry = time.time() + ttl if ttl else None
+            self._cache[key] = (value, expiry)
+            return True
+
+    async def delete(self, key: str) -> bool:
+        """Delete key from cache."""
+        async with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+                return True
+            return False
+
+    async def delete_pattern(self, pattern: str) -> int:
+        """Delete keys matching pattern."""
+        async with self._lock:
+            # Convert Redis pattern to fnmatch pattern
+            fn_pattern = pattern.replace("*", "*")
+            keys_to_delete = [k for k in self._cache if fnmatch.fnmatch(k, fn_pattern)]
+            for key in keys_to_delete:
+                del self._cache[key]
+            return len(keys_to_delete)
+
+    async def ping(self) -> bool:
+        """Always returns True for in-memory cache."""
+        return True
+
+    async def close(self) -> None:
+        """Clear the cache."""
+        async with self._lock:
+            self._cache.clear()
+
+
+_metrics_unavailable_logged = False
+
+
 def _record_cache_failure(operation: str) -> None:
     """Record cache operation failure metric (lazy import to avoid circular dependency)."""
+    global _metrics_unavailable_logged  # noqa: PLW0603
+
     try:
         from backend.core.observability.metrics import record_cache_operation_failure  # noqa: PLC0415
 
         record_cache_operation_failure(operation)
     except ImportError:
-        # Metrics module not available (e.g., during early initialization)
-        pass
+        # Log once to avoid log spam, but make it visible that metrics are unavailable
+        if not _metrics_unavailable_logged:
+            logger.debug(
+                "Metrics module unavailable - cache operation failures will not be recorded",
+                operation=operation,
+            )
+            _metrics_unavailable_logged = True
 
 
 T = TypeVar("T")
@@ -35,11 +146,28 @@ _redis_circuit_breaker = type_preserving_circuit_breaker(get_redis_circuit_break
 
 
 class CacheService:
-    """Redis-based cache service with automatic connection management and error handling."""
+    """Redis-based cache service with automatic connection management and error handling.
+
+    Includes rate limiting for bulk deletion operations to prevent cache stampedes.
+    Falls back to in-memory cache in local/dev environments when Redis is unavailable.
+    """
+
+    # Rate limiting for deletion operations to prevent abuse/stampede
+    MAX_CONCURRENT_DELETIONS = 5
+
+    # Environments where in-memory fallback is allowed
+    _FALLBACK_ENVIRONMENTS = frozenset({"local", "dev", "test"})
 
     def __init__(self) -> None:
         self._redis_client: redis.Redis | None = None
+        self._in_memory_cache: InMemoryCache | None = None
         self._initialized = False
+        self._using_fallback = False
+        self._deletion_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_DELETIONS)
+
+    def _should_use_fallback(self) -> bool:
+        """Check if in-memory fallback should be used."""
+        return SETTINGS.APP.ENVIRONMENT in self._FALLBACK_ENVIRONMENTS
 
     async def _ensure_connected(self) -> None:
         """Ensure Redis connection is established."""
@@ -60,12 +188,38 @@ class CacheService:
             logger.info("Redis cache service connected")
             self._initialized = True
         except (redis.ConnectionError, redis.TimeoutError) as e:
-            logger.warning("Redis connection failed, caching disabled", error=str(e))
             self._redis_client = None
+            if self._should_use_fallback():
+                self._in_memory_cache = InMemoryCache()
+                self._using_fallback = True
+                logger.warning(
+                    "Redis unavailable, using in-memory cache fallback",
+                    error=str(e),
+                    environment=SETTINGS.APP.ENVIRONMENT,
+                )
+            else:
+                logger.warning(
+                    "Redis connection failed, caching disabled",
+                    error=str(e),
+                    environment=SETTINGS.APP.ENVIRONMENT,
+                )
             self._initialized = True
         except (ValueError, TypeError) as e:
-            logger.warning("Redis configuration error, caching disabled", error=str(e))
             self._redis_client = None
+            if self._should_use_fallback():
+                self._in_memory_cache = InMemoryCache()
+                self._using_fallback = True
+                logger.warning(
+                    "Redis config error, using in-memory cache fallback",
+                    error=str(e),
+                    environment=SETTINGS.APP.ENVIRONMENT,
+                )
+            else:
+                logger.warning(
+                    "Redis configuration error, caching disabled",
+                    error=str(e),
+                    environment=SETTINGS.APP.ENVIRONMENT,
+                )
             self._initialized = True
 
     async def __aenter__(self) -> "CacheService":
@@ -80,6 +234,10 @@ class CacheService:
     def _is_redis_available(self) -> bool:
         """Check if Redis client is available."""
         return self._redis_client is not None
+
+    def _is_cache_available(self) -> bool:
+        """Check if any cache backend (Redis or in-memory) is available."""
+        return self._redis_client is not None or self._in_memory_cache is not None
 
     def _build_log_context(
         self,
@@ -151,6 +309,13 @@ class CacheService:
 
     async def get(self, key: str) -> str | None:
         """Get string value from cache."""
+        await self._ensure_connected()
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            result = await self._in_memory_cache.get(key)
+            logger.debug("Cache lookup (in-memory)", key=key, hit=result is not None)
+            return result
 
         async def _get_operation() -> str | None:
             _result = await self._redis_client.get(key)  # type: ignore[union-attr]
@@ -166,6 +331,19 @@ class CacheService:
 
     async def get_json(self, key: str) -> dict[str, Any] | None:
         """Get JSON value from cache with datetime deserialization."""
+        await self._ensure_connected()
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            _value = await self._in_memory_cache.get(key)
+            if _value is None:
+                return None
+            _json_value = orjson.loads(_value)
+            if isinstance(_json_value.get("created_at"), str):
+                _json_value["created_at"] = datetime.fromisoformat(_json_value["created_at"])
+            if isinstance(_json_value.get("updated_at"), str):
+                _json_value["updated_at"] = datetime.fromisoformat(_json_value["updated_at"])
+            return cast("dict[str, Any]", _json_value)
 
         async def _get_json_operation() -> dict[str, Any] | None:
             _value = await self._redis_client.get(key)  # type: ignore[union-attr]
@@ -190,6 +368,11 @@ class CacheService:
 
     async def set(self, key: str, value: str, ttl: int | None = None) -> bool:
         """Set string value in cache with optional TTL."""
+        await self._ensure_connected()
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            return await self._in_memory_cache.set(key, value, ttl)
 
         async def _set_operation() -> bool:
             if ttl:
@@ -222,6 +405,11 @@ class CacheService:
         Returns:
             True if key was set (lock acquired), False if key already existed
         """
+        await self._ensure_connected()
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            return await self._in_memory_cache.setnx(key, value, ttl)
 
         async def _setnx_operation() -> bool:
             # Use SET with NX (only set if not exists) and optional EX (expiry)
@@ -246,6 +434,12 @@ class CacheService:
 
     async def set_json(self, key: str, value: dict[str, Any], ttl: int | None = None) -> bool:
         """Set JSON value in cache with optional TTL."""
+        await self._ensure_connected()
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            _json_value = orjson.dumps(value, default=str).decode("utf-8")
+            return await self._in_memory_cache.set(key, _json_value, ttl)
 
         async def _set_json_operation() -> bool:
             _json_value = orjson.dumps(value, default=str)
@@ -267,6 +461,11 @@ class CacheService:
 
     async def delete(self, key: str) -> bool:
         """Delete a single key from cache."""
+        await self._ensure_connected()
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            return await self._in_memory_cache.delete(key)
 
         async def _delete_operation() -> bool:
             _result = await self._redis_client.delete(key)  # type: ignore[union-attr]
@@ -289,13 +488,25 @@ class CacheService:
         KEYS is O(N) against all keys and blocks the server.
         SCAN is non-blocking and iterates incrementally.
 
+        Rate limited via semaphore to prevent cache stampede from concurrent
+        deletion requests.
+
         Args:
             pattern: Redis key pattern to match (e.g., "user:*")
             batch_size: Number of keys to scan per iteration
             log_as_info: If True, log deletions at INFO level; otherwise DEBUG level
         """
+        await self._ensure_connected()
+
         _log_func = logger.info if log_as_info else logger.debug
         _log_message = "Invalidated cache entries" if log_as_info else "Deleted cache entries"
+
+        # Use in-memory fallback if active
+        if self._using_fallback and self._in_memory_cache:
+            deleted = await self._in_memory_cache.delete_pattern(pattern)
+            if deleted > 0:
+                _log_func(_log_message, pattern=pattern, deleted_count=deleted)
+            return deleted
 
         async def _delete_pattern_operation() -> int:
             _deleted = 0
@@ -314,15 +525,17 @@ class CacheService:
                 _log_func(_log_message, pattern=pattern, deleted_count=_deleted)
             return _deleted
 
-        return (
-            await self._execute_redis_operation(
-                _delete_pattern_operation,
-                "delete cache pattern",
-                pattern=pattern,
-                default_return=0,
+        # Rate limit deletion operations to prevent stampede
+        async with self._deletion_semaphore:
+            return (
+                await self._execute_redis_operation(
+                    _delete_pattern_operation,
+                    "delete cache pattern",
+                    pattern=pattern,
+                    default_return=0,
+                )
+                or 0
             )
-            or 0
-        )
 
     async def invalidate_cache(self, pattern: str, batch_size: int = 100) -> int:
         """Invalidate cache entries matching a pattern.
@@ -334,12 +547,16 @@ class CacheService:
 
     async def ping(self) -> bool:
         """
-        Check Redis connectivity via PING command.
+        Check cache connectivity.
 
         Returns:
-            True if Redis is connected and responding, False otherwise.
+            True if cache (Redis or in-memory) is available and responding, False otherwise.
         """
         await self._ensure_connected()
+
+        # In-memory fallback is always available
+        if self._using_fallback and self._in_memory_cache:
+            return await self._in_memory_cache.ping()
 
         if not self._is_redis_available():
             return False
@@ -352,7 +569,15 @@ class CacheService:
             return True
 
     async def close(self) -> None:
-        """Close Redis connection gracefully."""
+        """Close cache connection gracefully."""
+        # Close in-memory cache if active
+        if self._in_memory_cache:
+            await self._in_memory_cache.close()
+            logger.info("In-memory cache cleared")
+            self._in_memory_cache = None
+            self._using_fallback = False
+
+        # Close Redis if active
         if self._redis_client:
             try:
                 await self._redis_client.close()
@@ -364,4 +589,5 @@ class CacheService:
                 logger.warning("Error closing Redis connection", error=str(e))
             finally:
                 self._redis_client = None
-                self._initialized = False
+
+        self._initialized = False

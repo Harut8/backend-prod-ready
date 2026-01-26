@@ -54,7 +54,7 @@ FROM python:3.11.11-slim-bookworm AS runtime
 ARG APP_USER=appuser
 ARG APP_UID=1000
 ARG APP_GID=1000
-ARG ENV_STAGE=production
+ARG ENV_STAGE=prod
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -62,7 +62,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
     ENV_STAGE=${ENV_STAGE} \
-    SERVER_MODE=production
+    SERVER_MODE=production \
+    # Granian server configuration (can be overridden at runtime)
+    GRANIAN_WORKERS=8 \
+    GRANIAN_BACKLOG=2048 \
+    GRANIAN_BACKPRESSURE=512
 
 # Install minimal runtime dependencies (optimized for caching)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -105,23 +109,21 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # Production command with Granian ASGI server
 # Granian is a Rust-based ASGI server: 2-3x faster than Uvicorn, 50% less memory
 # Using /dev/shm for worker temp directory for better performance (shared memory)
-# Configuration:
-#   - 8 workers (matches CPU cores, same as previous Gunicorn setup)
-#   - uvloop for async event loop (same as Uvicorn setup)
-#   - HTTP/1 and HTTP/2 auto-detection (upgrade from HTTP/1-only Uvicorn)
-#   - backlog 2048 (same as previous Uvicorn config)
-#   - backpressure 512: max concurrent connections per worker (8 workers * 512 = 4096 total)
+# Configuration (configurable via environment variables):
+#   - GRANIAN_WORKERS: number of worker processes (default: 8)
+#   - GRANIAN_BACKLOG: TCP connection backlog (default: 2048)
+#   - GRANIAN_BACKPRESSURE: max concurrent connections per worker (default: 512)
 #   - workers-lifetime 43200 (12 hours): restart workers to prevent memory leaks
 #   - respawn-interval 30: stagger worker restarts by 30 seconds
 CMD ["sh", "-c", "cd /dev/shm && exec granian \
      --interface asgi \
      --host 0.0.0.0 \
      --port 8000 \
-     --workers 8 \
+     --workers ${GRANIAN_WORKERS:-8} \
      --loop uvloop \
      --http auto \
-     --backlog 2048 \
-     --backpressure 512 \
+     --backlog ${GRANIAN_BACKLOG:-2048} \
+     --backpressure ${GRANIAN_BACKPRESSURE:-512} \
      --workers-lifetime 43200 \
      --respawn-interval 30 \
      --process-name prod-ready-backend \
@@ -138,7 +140,7 @@ FROM runtime AS development
 USER root
 
 # Override environment for development
-ENV ENV_STAGE=development \
+ENV ENV_STAGE=dev \
     SERVER_MODE=development \
     DEBUG=true
 

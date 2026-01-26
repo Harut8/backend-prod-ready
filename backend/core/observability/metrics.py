@@ -210,7 +210,6 @@ def _normalize_path(path: str) -> str:
 
     Replaces dynamic path segments (UUIDs, IDs) with placeholders.
     """
-
     # Replace UUIDs
     path = re.sub(
         r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
@@ -219,43 +218,6 @@ def _normalize_path(path: str) -> str:
     )
     # Replace numeric IDs
     return re.sub(r"/\d+(/|$)", "/{id}\\1", path)
-
-
-def create_metrics_middleware() -> Callable[[Request, Callable[..., Any]], Any]:
-    """Create middleware for collecting HTTP metrics."""
-
-    async def metrics_middleware(request: Request, call_next: Callable[..., Any]) -> Response:
-        """Middleware to collect HTTP request metrics."""
-        method = request.method
-        path = _normalize_path(request.url.path)
-
-        # Skip metrics endpoint itself to avoid recursion
-        if path in ("/metrics", "/api/v1/system/metrics"):
-            result: Response = await call_next(request)
-            return result
-
-        # Track in-progress requests
-        http_requests_in_progress.labels(method=method, path=path).inc()
-
-        start_time = time.perf_counter()
-        response: Response | None = None
-
-        try:
-            response = await call_next(request)
-            return response  # noqa: RET504
-        finally:
-            # Record duration
-            duration = time.perf_counter() - start_time
-            http_request_duration_seconds.labels(method=method, path=path).observe(duration)
-
-            # Record request count
-            status_code = response.status_code if response else 500
-            http_requests_total.labels(method=method, path=path, status_code=status_code).inc()
-
-            # Decrement in-progress
-            http_requests_in_progress.labels(method=method, path=path).dec()
-
-    return metrics_middleware
 
 
 def setup_metrics(app: FastAPI, *, endpoint: str | None = None) -> None:
@@ -304,14 +266,22 @@ def setup_metrics(app: FastAPI, *, endpoint: str | None = None) -> None:
             http_requests_total.labels(method=method, path=path, status_code=status_code).inc()
             http_requests_in_progress.labels(method=method, path=path).dec()
 
-    # Add metrics endpoint
+    # Add metrics endpoint with error handling
     @app.get(endpoint, include_in_schema=False)
     async def metrics() -> Response:
         """Prometheus metrics endpoint."""
-        return Response(
-            content=generate_latest(registry),
-            media_type=CONTENT_TYPE_LATEST,
-        )
+        try:
+            return Response(
+                content=generate_latest(registry),
+                media_type=CONTENT_TYPE_LATEST,
+            )
+        except Exception as e:
+            logger.exception("Metrics generation failed", error=str(e))
+            return Response(
+                content=b"# Error generating metrics\n",
+                status_code=500,
+                media_type="text/plain",
+            )
 
     logger.info("Prometheus metrics enabled", endpoint=endpoint)
 

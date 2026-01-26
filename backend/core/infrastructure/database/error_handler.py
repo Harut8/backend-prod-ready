@@ -7,6 +7,8 @@ from typing import Any, NoReturn, ParamSpec, TypeVar
 from asyncpg.exceptions import (
     ConnectionDoesNotExistError,
     ConnectionFailureError,
+    InvalidAuthorizationSpecificationError,
+    InvalidPasswordError,
     PostgresConnectionError,
 )
 from fastapi import HTTPException
@@ -14,6 +16,7 @@ from purgatory import CircuitBreakerFailed
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, TimeoutError as SQLAlchemyTimeoutError
 import structlog
 
+from backend.core.conf.settings import SETTINGS
 from backend.core.exceptions.db_exceptions import (
     DatabaseCircuitBreakerOpenError,
     DatabaseDBAPIError,
@@ -30,6 +33,9 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 logger = structlog.get_logger(__name__)
+
+# Whether to include query params in error logs (only in DEBUG mode for security)
+_INCLUDE_QUERY_PARAMS = SETTINGS.APP.LOG_LEVEL == "DEBUG"
 
 QUERY_STATEMENT_MAX_LENGTH = 500
 QUERY_PARAMS_MAX_LENGTH = 200
@@ -101,7 +107,12 @@ def _sanitize_params(params: dict[str, Any] | tuple[Any, ...] | list[Any] | None
 
 
 def _extract_query_info(exception: Exception) -> dict[str, str]:
-    """Extract query information from SQLAlchemy exceptions for debugging."""
+    """Extract query information from SQLAlchemy exceptions for debugging.
+
+    Security note: Query parameters are only included in DEBUG mode to prevent
+    accidental exposure of sensitive data in production logs. In production,
+    only the query statement (truncated) and database error message are logged.
+    """
     _info: dict[str, str] = {}
 
     if hasattr(exception, "statement") and exception.statement:
@@ -112,7 +123,8 @@ def _extract_query_info(exception: Exception) -> dict[str, str]:
             else _statement
         )
 
-    if hasattr(exception, "params") and exception.params:
+    # Only include query params in DEBUG mode to prevent sensitive data exposure
+    if _INCLUDE_QUERY_PARAMS and hasattr(exception, "params") and exception.params:
         try:
             # Sanitize sensitive data before logging
             _params_str = _sanitize_params(exception.params)
@@ -123,6 +135,9 @@ def _extract_query_info(exception: Exception) -> dict[str, str]:
             )
         except Exception:  # noqa: BLE001
             _info["query_params"] = "[Unable to serialize params]"
+    elif hasattr(exception, "params") and exception.params:
+        # In non-DEBUG mode, indicate params exist but are redacted
+        _info["query_params"] = "[REDACTED - set LOG_LEVEL=DEBUG to view]"
 
     if hasattr(exception, "orig") and exception.orig:
         _info["database_error"] = str(exception.orig)
@@ -216,3 +231,21 @@ def _wrap_sync_function(func: Callable[P, R]) -> Callable[P, R]:
             _handle_exception(e, func.__name__)
 
     return sync_wrapper
+
+
+# =============================================================================
+# Startup Retry Helpers
+# =============================================================================
+
+
+def is_dns_resolution_error(exception: BaseException) -> bool:
+    """Check if exception is a DNS resolution error (non-retryable)."""
+    if isinstance(exception, socket.gaierror):
+        # gaierror errno 8 = EAI_NONAME (hostname not found)
+        return exception.args[0] == 8
+    return False
+
+
+def is_auth_error(exception: BaseException) -> bool:
+    """Check if exception is an authentication error (non-retryable)."""
+    return isinstance(exception, (InvalidPasswordError, InvalidAuthorizationSpecificationError))

@@ -63,7 +63,7 @@ dev: env-setup
 
 prod: env-setup
 	@if [ -f docker-compose.override.yml ]; then mv docker-compose.override.yml docker-compose.override.yml.bak; fi
-	@ENV_STAGE=production docker compose -f $(COMPOSE_FILE) -f docker-compose.prod.yml --env-file $(ENV_FILE) up --build
+	@ENV_STAGE=prod docker compose -f $(COMPOSE_FILE) -f docker-compose.prod.yml --env-file $(ENV_FILE) up --build
 	@if [ -f docker-compose.override.yml.bak ]; then mv docker-compose.override.yml.bak docker-compose.override.yml; fi
 
 shell:
@@ -74,15 +74,15 @@ shell:
 # =============================================================================
 lint:
 	@cd backend && uv run ruff check core/ features/ --fix
-	@cd backend && uv run mypy core/ features/ || true
+	@cd backend && uv run mypy core/ features/
 
 format:
 	@cd backend && uv run ruff format core/ features/
 	@cd backend && uv run ruff check --fix core/ features/
 
 security:
-	@cd backend && uv run bandit -r core/ features/ -ll || true
-	@cd backend && uv run safety scan || true
+	@cd backend && uv run bandit -r core/ features/ -ll
+	@cd backend && uv run safety scan
 
 secrets:
 	@if command -v gitleaks >/dev/null 2>&1; then \

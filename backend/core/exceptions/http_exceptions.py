@@ -1,7 +1,7 @@
 from typing import Any
 
 from fastapi import HTTPException, status
-from fastapi_msgspec.responses import MsgSpecJSONResponse
+from fastapi.responses import JSONResponse
 
 from backend.core.exceptions.error_codes import ErrorCode
 
@@ -60,21 +60,21 @@ class ServiceException(HTTPException):
         """Return a developer-friendly string representation."""
         return f"{self.__class__.__name__}(code={self.code}, status_code={self.status_code}, message={self.message!r})"
 
-    def to_response(self, *, exclude_none: bool = True) -> MsgSpecJSONResponse:
-        """Convert exception to MsgSpecJSONResponse for high-performance JSON serialization.
+    def to_response(self, *, exclude_none: bool = True) -> JSONResponse:
+        """Convert exception to JSONResponse.
 
         Args:
             exclude_none: If True, exclude None values from the response payload.
 
         Returns:
-            MsgSpecJSONResponse with the exception details.
+            JSONResponse with the exception details.
         """
         if exclude_none:
-            return MsgSpecJSONResponse(
+            return JSONResponse(
                 status_code=self.status_code,
                 content={"detail": {k: v for k, v in self.payload.items() if v is not None}},
             )
-        return MsgSpecJSONResponse(status_code=self.status_code, content={"detail": self.payload})
+        return JSONResponse(status_code=self.status_code, content={"detail": self.payload})
 
 
 class RequestError(ServiceException):

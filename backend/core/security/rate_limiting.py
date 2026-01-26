@@ -39,19 +39,24 @@ def get_user_id_or_ip(request: Request) -> str:
     while unauthenticated users are rate-limited by IP address.
     """
     # Try to get user ID from token
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
+    _auth_header = request.headers.get("Authorization")
+    if _auth_header and _auth_header.startswith("Bearer "):
         try:
             # Lazy import to avoid circular dependency
             from backend.core.auth.jwt import jwt_decode  # noqa: PLC0415
+            from backend.core.exceptions.jwt_exceptions import JWTTokenError  # noqa: PLC0415
 
-            token = auth_header.split(" ")[1]
-            payload = jwt_decode(token)
-            if payload and "user_id" in payload:
-                return f"user:{payload['user_id']}"
-        except Exception as e:  # noqa: BLE001
-            # Catch all JWT-related exceptions (expired, invalid, malformed, etc.)
+            _token = _auth_header.split(" ")[1]
+            _payload = jwt_decode(_token)
+            if _payload and "user_id" in _payload:
+                return f"user:{_payload['user_id']}"
+        except JWTTokenError as e:
+            # Handle all JWT-related exceptions (expired, invalid, malformed, etc.)
             logger.debug("Failed to decode token for rate limiting", error=str(e))
+            # Fall through to IP-based rate limiting
+        except (IndexError, KeyError) as e:
+            # Handle malformed Authorization header or missing user_id
+            logger.debug("Malformed auth header for rate limiting", error=str(e))
             # Fall through to IP-based rate limiting
 
     # Fall back to IP address
@@ -59,11 +64,14 @@ def get_user_id_or_ip(request: Request) -> str:
 
 
 # Disable rate limiting if RATE_LIMIT_ENABLED=false (for load testing)
+# Enable in-memory fallback to maintain rate limiting during Redis outages
+# This prevents either complete availability loss (fail closed) or security bypass (fail open)
 limiter = Limiter(
     key_func=get_user_id_or_ip,
     storage_uri=SETTINGS.REDIS.REDIS_URL,
     default_limits=[f"{SETTINGS.RATE_LIMIT.RATE_LIMIT_REQUESTS_PER_MINUTE}/minute"],
     enabled=SETTINGS.RATE_LIMIT.RATE_LIMIT_ENABLED,
+    in_memory_fallback_enabled=True,
 )
 
 

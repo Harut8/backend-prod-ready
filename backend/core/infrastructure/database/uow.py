@@ -119,10 +119,18 @@ class BaseUnitOfWork(ABC):
         exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
-        """Exit async context with automatic commit/rollback and cleanup."""
+        """Exit async context with automatic commit/rollback and cleanup.
+
+        Rollback behavior:
+        - On any exception: rollback if we own the session
+        - On timeout: rollback and mark for cleanup delay
+        - On success with auto_commit: commit
+        - On success without auto_commit: leave transaction open for parent UoW
+        """
         _start_time = time.perf_counter()
         try:
-            if not self._timeout_occurred and exc_type and exc_val:
+            # Detect timeout exceptions to trigger cleanup delay
+            if exc_type and exc_val:
                 from backend.core.exceptions.db_exceptions import DatabaseTimeoutError  # noqa: PLC0415
                 from backend.core.exceptions.http_exceptions import TimeoutException  # noqa: PLC0415
 
@@ -131,8 +139,10 @@ class BaseUnitOfWork(ABC):
                     self._logger.info("Timeout detected", exception_type=exc_type.__name__)
 
             if exc_type:
+                # Always rollback on exception if we own the session
+                # This ensures transactions are properly terminated even on timeout
                 if self._owns_session:
-                    await self.rollback()
+                    await self._safe_rollback()
             elif self._auto_commit:
                 await self.commit()
         finally:
@@ -142,6 +152,23 @@ class BaseUnitOfWork(ABC):
                 self._repositories.clear()
         _duration = time.perf_counter() - _start_time
         self._logger.info("UOW cleaned up", duration=f"{_duration:.5f}s")
+
+    async def _safe_rollback(self) -> None:
+        """Perform rollback with timeout protection to prevent hanging on broken connections."""
+        if not self._session:
+            return
+
+        try:
+            await asyncio.wait_for(
+                self._session.rollback(),
+                timeout=SETTINGS.TIMEOUTS.SESSION_CLOSE_TIMEOUT,
+            )
+            self._logger.debug("Transaction rolled back")
+        except asyncio.TimeoutError:
+            self._logger.warning("Rollback timed out, connection may be in bad state")
+            self._timeout_occurred = True
+        except (OSError, RuntimeError) as e:
+            self._logger.warning("Rollback failed", error=str(e))
 
     async def _cleanup(self) -> None:
         """Cleanup session to prevent connection leaks."""
@@ -191,14 +218,24 @@ class BaseUnitOfWork(ABC):
 
     @database_error_handler
     async def rollback(self) -> None:
-        """Rollback the current transaction."""
+        """Rollback the current transaction.
+
+        For internal use during __aexit__, prefer _safe_rollback() which has
+        timeout protection. This method is for explicit rollback calls.
+        """
         if not self._session:
             msg = "Cannot rollback without active session"
             raise RuntimeError(msg)
 
         try:
-            await self._session.rollback()
+            await asyncio.wait_for(
+                self._session.rollback(),
+                timeout=SETTINGS.TIMEOUTS.SESSION_CLOSE_TIMEOUT,
+            )
             self._logger.debug("Transaction rolled back")
+        except asyncio.TimeoutError:
+            self._logger.warning("Rollback timed out")
+            self._timeout_occurred = True
         except Exception as e:
             self._logger.exception("Rollback failed", error=str(e))
 

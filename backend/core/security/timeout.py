@@ -82,15 +82,15 @@ def _wrap_async_function(
                     instance_class=args[0].__class__.__name__,
                 )
 
-            _error_msg = f"Function '{func_name}' exceeded timeout of {timeout_seconds}s"
+            # Log detailed information for debugging (internal only)
             logger.warning(
                 "Function execution timed out",
                 function=func_name,
                 timeout_seconds=timeout_seconds,
-                error=_error_msg,
             )
+            # Return generic message to clients to avoid leaking internal function names
             raise RequestTimeoutError(
-                message=_error_msg,
+                message="Request timed out. Please try again.",
                 meta={
                     "retry_after": 5,
                     "suggestion": "System is under load. Please retry with exponential backoff.",

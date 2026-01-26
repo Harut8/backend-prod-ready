@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.core.api.dtos.base import BaseResponseDto
+from backend.core.utils.datetime import get_current_utc_time
 from pydantic import Field
 
 
@@ -150,7 +151,7 @@ class ErrorResponse(BaseResponseDto):
     )
 
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=get_current_utc_time,
         description="When the error occurred",
     )
 

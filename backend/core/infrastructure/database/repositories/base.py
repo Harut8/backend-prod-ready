@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 # It must be a subclass of DbBaseModel[DomainT] where DomainT is any domain type
 T = TypeVar("T", bound="DbBaseModel[Any]")
-TIMEOUT_SECONDS = 8.0
 
 
 @dataclass

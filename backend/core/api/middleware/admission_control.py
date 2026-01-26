@@ -12,6 +12,7 @@ This is critical for preventing:
 """
 
 import asyncio
+import threading
 
 from backend.core.conf.settings import SETTINGS
 from fastapi import Request, Response
@@ -43,14 +44,22 @@ class AdmissionControlMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, max_concurrent: int | None = None) -> None:  # type: ignore[no-untyped-def]  # noqa: ANN001
         super().__init__(app)
         self._max_concurrent = max_concurrent or SETTINGS.APP.MAX_CONCURRENT_REQUESTS
-        self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        self._semaphore: asyncio.Semaphore | None = None  # Lazy init in async context
         self._current_requests = 0
         self._total_rejected = 0
+        # Lock for thread-safe counter updates (async context may interleave)
+        self._counter_lock = threading.Lock()
 
         logger.info(
             "Admission control middleware initialized",
             max_concurrent_requests=self._max_concurrent,
         )
+
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        """Get or create semaphore in the current event loop context."""
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        return self._semaphore
 
     @property
     def current_requests(self) -> int:
@@ -74,24 +83,13 @@ class AdmissionControlMiddleware(BaseHTTPMiddleware):
         if self._is_exempt(request.url.path):
             return await call_next(request)
 
-        # Try to acquire semaphore without blocking
-        acquired = self._semaphore.locked() is False
+        semaphore = self._get_semaphore()
 
-        if not acquired:
-            # Check if we can acquire without waiting
-            try:
-                # Use wait_for with 0 timeout to check without blocking
-                await asyncio.wait_for(
-                    self._semaphore.acquire(),
-                    timeout=0.001,  # Near-instant timeout
-                )
-                acquired = True
-            except TimeoutError:
-                acquired = False
-
-        if not acquired:
+        # Check if semaphore is available (non-blocking check)
+        if semaphore.locked():
             # Server is at capacity - reject request
-            self._total_rejected += 1
+            with self._counter_lock:
+                self._total_rejected += 1
             logger.warning(
                 "Request rejected - server at capacity",
                 path=request.url.path,
@@ -109,11 +107,14 @@ class AdmissionControlMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": "5"},
             )
 
-        # Semaphore acquired - process request
-        self._current_requests += 1
+        # Acquire semaphore and process request
+        await semaphore.acquire()
+        with self._counter_lock:
+            self._current_requests += 1
         try:
             response: Response = await call_next(request)
             return response
         finally:
-            self._current_requests -= 1
-            self._semaphore.release()
+            with self._counter_lock:
+                self._current_requests -= 1
+            semaphore.release()

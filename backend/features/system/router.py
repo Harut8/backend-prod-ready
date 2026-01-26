@@ -47,7 +47,7 @@ def _to_health_response_dto(system_health: SystemHealth) -> SystemHealthResponse
     )
 
 
-@system_router.api_route("/health", methods=["GET", "HEAD"], operation_id="system_health_check")
+@system_router.get("/health", operation_id="system_health_check")
 @limiter.limit("60/minute")
 async def health(request: Request) -> ResponseModel[SystemStatusResponseDto]:  # noqa: ARG001
     """
@@ -62,7 +62,7 @@ async def health(request: Request) -> ResponseModel[SystemStatusResponseDto]:  #
     return ResponseModel.ok(data=SystemStatusResponseDto(status="ok", service=SETTINGS.APP.APP_NAME))
 
 
-@system_router.api_route("/ready", methods=["GET", "HEAD"], operation_id="system_ready_check")
+@system_router.get("/ready", operation_id="system_ready_check")
 @limiter.limit("60/minute")
 @inject
 async def ready(

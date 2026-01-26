@@ -1,8 +1,7 @@
 """
-Observability utilities for monitoring, logging, and auditing.
+Observability utilities for monitoring, logging, and tracing.
 """
 
-from backend.core.observability.audit import AuditAction, AuditLog, AuditLogger
 from backend.core.observability.context import create_log_context
 from backend.core.observability.logging import (
     configure_logging,
@@ -29,10 +28,6 @@ from backend.core.observability.tracing import (
 
 
 __all__ = [
-    "AuditAction",
-    "AuditLog",
-    # Audit logging
-    "AuditLogger",
     "circuit_breaker_state",
     # Logging configuration
     "configure_logging",

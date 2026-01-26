@@ -9,44 +9,62 @@ This module configures and creates the FastAPI application with:
 - Graceful shutdown handling
 """
 
-import asyncio
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
-import logging
-import signal
-import sys
+# =============================================================================
+# Logging Configuration (MUST be first, before other app imports)
+# =============================================================================
+# Configure logging before importing other modules to ensure all structlog
+# loggers are created with the correct configuration (timestamps, colors, etc.)
 
-from fastapi import FastAPI
-from fastapi.exceptions import RequestValidationError
-from pydantic_core import _pydantic_core
-from slowapi.errors import RateLimitExceeded
-from sqlalchemy import text
-from starlette.middleware.cors import CORSMiddleware
-import structlog
-import tenacity
+from backend.core.observability.logging import configure_logging  # noqa: E402
 
-from backend.core.api.middleware.admission_control import AdmissionControlMiddleware
-from backend.core.api.middleware.request_id import RequestIdMiddleware
-from backend.core.conf.settings import SETTINGS
-from backend.core.domain.exceptions import DomainError
-from backend.core.exceptions.handlers import (
+configure_logging()
+
+# =============================================================================
+# Standard Library Imports
+# =============================================================================
+
+import asyncio  # noqa: E402
+from collections.abc import AsyncGenerator  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+import logging  # noqa: E402
+import sys  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
+
+# =============================================================================
+# Third-Party Imports
+# =============================================================================
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from pydantic_core import _pydantic_core  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from starlette.exceptions import HTTPException  # noqa: E402
+from starlette.middleware.cors import CORSMiddleware  # noqa: E402
+import structlog  # noqa: E402
+import tenacity  # noqa: E402
+
+# =============================================================================
+# Application Imports
+# =============================================================================
+
+from backend.core.api.middleware.admission_control import AdmissionControlMiddleware  # noqa: E402
+from backend.core.api.middleware.request_id import RequestIdMiddleware  # noqa: E402
+from backend.core.conf.settings import SETTINGS  # noqa: E402
+from backend.core.domain.exceptions import DomainError  # noqa: E402
+from backend.core.exceptions.handlers import (  # noqa: E402
     domain_exception_handler,
+    http_exception_handler,
     unhandled_exception_handler,
     validation_exception_handler,
 )
-from backend.core.infrastructure.container import InfrastructureContainer, shutdown_infrastructure
-from backend.core.observability.logging import configure_logging
-from backend.core.observability.metrics import setup_metrics
-from backend.core.observability.tracing import setup_tracing
-from backend.core.security.rate_limiting import limiter, rate_limit_exceeded_handler
-from backend.features.system import SystemContainer, router as system_router_module, system_router
+from backend.core.infrastructure.container import InfrastructureContainer, shutdown_infrastructure  # noqa: E402
+from backend.core.infrastructure.database.error_handler import is_auth_error, is_dns_resolution_error  # noqa: E402
+from backend.core.observability.metrics import setup_metrics  # noqa: E402
+from backend.core.observability.tracing import setup_tracing  # noqa: E402
+from backend.core.security.rate_limiting import limiter, rate_limit_exceeded_handler  # noqa: E402
+from backend.features.system import SystemContainer, router as system_router_module, system_router  # noqa: E402
 
-
-# =============================================================================
-# Logging Configuration
-# =============================================================================
-
-configure_logging()
 logger = structlog.get_logger(__name__)
 
 
@@ -71,10 +89,28 @@ class Application(FastAPI):
 # =============================================================================
 
 
+def _should_retry_db_error(retry_state: tenacity.RetryCallState) -> bool:
+    """Determine if database error should be retried.
+
+    Non-retryable errors:
+    - DNS resolution errors: hostname is misconfigured
+    - Authentication errors: credentials are wrong, won't change on retry
+    - No exception (success): don't retry successful operations
+    """
+    exception = retry_state.outcome.exception() if retry_state.outcome else None
+    if not exception:
+        # No exception = success, don't retry
+        return False
+    if is_dns_resolution_error(exception):
+        return False
+    return not is_auth_error(exception)
+
+
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(3),
     wait=tenacity.wait_exponential(multiplier=1, min=4, max=15) + tenacity.wait_random(0, 2),
     reraise=True,
+    retry=_should_retry_db_error,
     before_sleep=tenacity.before_sleep_log(logger, logging.INFO),
 )
 async def _initialize_database(app: Application) -> None:
@@ -84,10 +120,37 @@ async def _initialize_database(app: Application) -> None:
     Sets conservative timeouts to prevent long-running queries
     from blocking the connection pool during startup.
     """
-    async with app.infrastructure_container.pg_db.provided.engine().begin() as conn:
-        await conn.execute(text("SET lock_timeout = '4s'"))
-        await conn.execute(text("SET statement_timeout = '8s'"))
-    logger.info("Database connection initialized")
+
+    try:
+        async with app.infrastructure_container.pg_db.provided.engine().begin() as conn:
+            await conn.execute(text("SET lock_timeout = '4s'"))
+            await conn.execute(text("SET statement_timeout = '8s'"))
+        logger.info("Database connection initialized")
+    except Exception as e:
+        db_url = SETTINGS.DATABASE.DATABASE_URL
+        parsed = urlparse(str(db_url))
+
+        if is_dns_resolution_error(e):
+            logger.exception(
+                "Database hostname cannot be resolved",
+                hostname=parsed.hostname or "unknown",
+                hint="Check POSTGRES_HOST in your environment file. "
+                "Use 'localhost' for local development or 'postgres' inside Docker.",
+            )
+        elif is_auth_error(e):
+            logger.exception(
+                "Database authentication failed",
+                username=parsed.username or "unknown",
+                hint="Check POSTGRES_USER and POSTGRES_PASSWORD in your environment file. "
+                "Ensure the database user exists and password is correct.",
+            )
+        raise
+
+
+async def _initialize_cache(app: Application) -> None:
+    """Initialize Redis cache connection during startup."""
+    cache_service = app.infrastructure_container.cache_service()
+    await cache_service._ensure_connected()
 
 
 # =============================================================================
@@ -101,31 +164,16 @@ async def lifespan(app: Application) -> AsyncGenerator[None, None]:
     Application lifespan context manager.
 
     Handles:
-    - Startup: Database initialization, signal handler registration
+    - Startup: Database and cache initialization
     - Shutdown: Graceful cleanup of all infrastructure resources
 
-    The ASGI lifespan protocol ensures this runs on worker startup/shutdown,
-    including when receiving SIGTERM/SIGINT from orchestrators like Kubernetes.
+    The ASGI lifespan protocol ensures this runs on worker startup/shutdown.
+    Uvicorn handles SIGTERM/SIGINT signals and triggers lifespan shutdown.
     """
-    shutdown_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-
-    def handle_signal(sig: signal.Signals) -> None:
-        """Handle termination signals."""
-        logger.info("Received shutdown signal", signal=sig.name)
-        shutdown_event.set()
-
-    # Register signal handlers for graceful shutdown
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))  # type: ignore[misc]
-        except (RuntimeError, NotImplementedError):
-            # Signal handlers not available on all platforms (e.g., Windows)
-            logger.debug("Could not register signal handler", signal=sig.name)
-
     try:
         # Startup
         await _initialize_database(app)
+        await _initialize_cache(app)
         logger.info(
             "Application started",
             app_name=SETTINGS.APP.APP_NAME,
@@ -136,7 +184,6 @@ async def lifespan(app: Application) -> AsyncGenerator[None, None]:
     finally:
         # Shutdown
         logger.info("Starting graceful shutdown")
-        shutdown_event.set()
 
         try:
             await asyncio.shield(
@@ -151,11 +198,6 @@ async def lifespan(app: Application) -> AsyncGenerator[None, None]:
             logger.exception("Error during shutdown")
         finally:
             logger.info("Shutdown completed")
-
-        # Remove signal handlers
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            with suppress(RuntimeError, NotImplementedError, ValueError):
-                loop.remove_signal_handler(sig)
 
 
 # =============================================================================
@@ -245,6 +287,9 @@ def _configure_exception_handlers(app: Application) -> None:
 
     # Rate limiting
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+    # HTTP exceptions (404, 405, etc.)
+    app.add_exception_handler(HTTPException, http_exception_handler)
 
     # Domain exceptions (business rule violations)
     app.add_exception_handler(DomainError, domain_exception_handler)
