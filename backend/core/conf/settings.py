@@ -55,11 +55,11 @@ class CustomSettings(BaseSettings):
 
 
 class AppSettings(CustomSettings):
-    APP_NAME: str = Field(default="Trainer.me API", alias="APP_NAME")
+    APP_NAME: str = Field(default="Prod Ready Backend API", alias="APP_NAME")
     APP_VERSION: str = Field(default="1.0.0", alias="APP_VERSION")
     ENVIRONMENT: Literal["local", "dev", "prod"] = Field(default="local", alias="ENVIRONMENT")
     LOG_LEVEL: str = Field(default="INFO", alias="LOG_LEVEL")
-    LOGGER_NAME: str = Field(default="trainer-me", alias="LOGGER_NAME")
+    LOGGER_NAME: str = Field(default="prod-ready-backend", alias="LOGGER_NAME")
     JSON_LOGS: bool = Field(default=False, alias="JSON_LOGS")
     INCLUDE_TRACE_CONTEXT: bool = Field(default=False, alias="INCLUDE_TRACE_CONTEXT")
     CORS_ORIGINS: list[str] = Field(
@@ -91,11 +91,11 @@ class AppSettings(CustomSettings):
 
 class PgDbSettings(AppSettings):
     POSTGRES_ENGINE: str = Field(default="postgresql+asyncpg", alias="POSTGRES_ENGINE")
-    POSTGRES_USER: str = Field(default="trainer_user", alias="POSTGRES_USER")
+    POSTGRES_USER: str = Field(default="prod_user", alias="POSTGRES_USER")
     POSTGRES_PASSWORD: SecretStr = Field(
-        default_factory=lambda: SecretStr("trainer_password"), alias="POSTGRES_PASSWORD"
+        default_factory=lambda: SecretStr("prod_password"), alias="POSTGRES_PASSWORD"
     )
-    POSTGRES_DB: str = Field(default="trainer_marketplace", alias="POSTGRES_DB")
+    POSTGRES_DB: str = Field(default="prod_ready_db", alias="POSTGRES_DB")
     POSTGRES_HOST: str = Field(default="postgres", alias="POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, alias="POSTGRES_PORT")
     DATABASE_URL: PostgresDsn | str = Field(default="", alias="DATABASE_URL")
@@ -142,11 +142,11 @@ class PgDbSettings(AppSettings):
             host = data.get("POSTGRES_HOST", "localhost")
             _built_uri = PostgresDsn.build(
                 scheme=data.setdefault("POSTGRES_ENGINE", "postgresql+asyncpg"),
-                username=data.setdefault("POSTGRES_USER", "trainer_user"),
-                password=data.setdefault("POSTGRES_PASSWORD", "trainer_password"),
+                username=data.setdefault("POSTGRES_USER", "prod_user"),
+                password=data.setdefault("POSTGRES_PASSWORD", "prod_password"),
                 host=host,
                 port=int(data.setdefault("POSTGRES_PORT", 5432)),
-                path=data.setdefault("POSTGRES_DB", "trainer_marketplace"),
+                path=data.setdefault("POSTGRES_DB", "prod_ready_db"),
             ).unicode_string()
             data["DATABASE_URL"] = _built_uri
         return data
@@ -166,8 +166,8 @@ class JWTSettings(CustomSettings):
     JWT_REFRESH_EXPIRE_DAYS: int = Field(
         default=30, alias="JWT_REFRESH_EXPIRE_DAYS", description="Refresh token expiry in days"
     )
-    AUDIENCE: SecretStr = Field(default_factory=lambda: SecretStr("trainer-me-frontend"), alias="JWT_AUDIENCE")
-    ISSUER: SecretStr = Field(default_factory=lambda: SecretStr("trainer-me-api"), alias="JWT_ISSUER")
+    AUDIENCE: SecretStr = Field(default_factory=lambda: SecretStr("prb-frontend"), alias="JWT_AUDIENCE")
+    ISSUER: SecretStr = Field(default_factory=lambda: SecretStr("prb-api"), alias="JWT_ISSUER")
 
     # Refresh token rotation settings
     REFRESH_TOKEN_ROTATION_ENABLED: bool = Field(
@@ -188,6 +188,11 @@ class GoogleOAuthSettings(CustomSettings):
     )
     GOOGLE_OAUTH_CLIENT_SECRET: SecretStr = Field(
         default_factory=lambda: SecretStr(SECRET_KEY_32), alias="GOOGLE_OAUTH_CLIENT_SECRET"
+    )
+    GOOGLE_OAUTH_REDIRECT_URI: str = Field(
+        default="http://localhost:8000/auth/google/callback",
+        alias="GOOGLE_OAUTH_REDIRECT_URI",
+        description="OAuth callback URL for Google authentication",
     )
 
 
@@ -303,7 +308,7 @@ class AdminSettings(CustomSettings):
         description="Base32-encoded TOTP secret for admin MFA (generate with: pyotp.random_base32())",
     )
     MFA_ISSUER_NAME: str = Field(
-        default="Trainer.me Admin",
+        default="PRB Admin",
         alias="ADMIN_MFA_ISSUER_NAME",
         description="Issuer name shown in authenticator apps (e.g., Google Authenticator)",
     )

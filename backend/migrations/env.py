@@ -18,14 +18,36 @@ sys.path.insert(0, str(project_root))
 
 from backend.core.conf.settings import SETTINGS
 from backend.core.infrastructure.database.models import DbBaseModel
-from backend.features.auth.models import *
 
-# Import all feature-based models for Trainer.me marketplace
-from backend.features.billing.models import *
-from backend.features.events.models import *
-from backend.features.prereg.models import *
-from backend.features.profiles.models import *
-from backend.features.tags.models import *
+# Import all feature-based models
+# from backend.features.auth.models import *
+# from backend.features.billing.models import *
+# from backend.features.events.models import *
+# from backend.features.prereg.models import *
+# from backend.features.profiles.models import *
+# from backend.features.tags.models import *
+
+# =============================================================================
+# Identity Plan Kit Models Integration
+# =============================================================================
+# Import identity-plan-kit Base and all models so they are included in migrations
+from identity_plan_kit.shared.database import Base as IPKBase
+
+# Auth models (users, providers, refresh_tokens)
+from identity_plan_kit.auth.models import user, user_provider, refresh_token  # noqa: F401
+
+# RBAC models (roles, permissions, role_permissions)
+from identity_plan_kit.rbac.models import role, permission, role_permission  # noqa: F401
+
+# Plans models (plans, features, limits, user_plans, usage)
+from identity_plan_kit.plans.models import (  # noqa: F401
+    plan,
+    feature,
+    plan_limit,
+    user_plan,
+    feature_usage,
+    plan_permission,
+)
 
 
 config = context.config
@@ -33,7 +55,20 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = DbBaseModel.metadata
+# Combine metadata from both app models and identity-plan-kit models
+# This allows Alembic to track all tables in a single migration system
+from sqlalchemy import MetaData
+
+combined_metadata = MetaData()
+
+# Reflect tables from both bases into combined metadata
+for table in DbBaseModel.metadata.tables.values():
+    table.to_metadata(combined_metadata)
+
+for table in IPKBase.metadata.tables.values():
+    table.to_metadata(combined_metadata)
+
+target_metadata = combined_metadata
 
 # Set database URL directly without interpolation issues
 # Check if POSTGRES_HOST is overridden for local development

@@ -23,7 +23,7 @@ def initialize_dbos(app: "FastAPI") -> DBOS:
     _dbos_database_url = str(SETTINGS.DATABASE.DATABASE_URL).replace("+asyncpg", "")
 
     _dbos_config: DBOSConfig = {
-        "name": "trainer-me-billing",
+        "name": "prb-billing",
         "database_url": _dbos_database_url,
         "conductor_key": os.environ.get("DBOS_CONDUCTOR_KEY", None),
     }

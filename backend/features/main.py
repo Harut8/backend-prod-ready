@@ -15,7 +15,8 @@ This module configures and creates the FastAPI application with:
 # Configure logging before importing other modules to ensure all structlog
 # loggers are created with the correct configuration (timestamps, colors, etc.)
 
-from backend.core.observability.logging import configure_logging  # noqa: E402
+from backend.core.observability.logging import configure_logging
+
 
 configure_logging()
 
@@ -33,9 +34,9 @@ from urllib.parse import urlparse  # noqa: E402
 # =============================================================================
 # Third-Party Imports
 # =============================================================================
-
 from fastapi import FastAPI  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
+from identity_plan_kit import IdentityPlanKit  # noqa: E402
 from pydantic_core import _pydantic_core  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
 from sqlalchemy import text  # noqa: E402
@@ -47,7 +48,6 @@ import tenacity  # noqa: E402
 # =============================================================================
 # Application Imports
 # =============================================================================
-
 from backend.core.api.middleware.admission_control import AdmissionControlMiddleware  # noqa: E402
 from backend.core.api.middleware.request_id import RequestIdMiddleware  # noqa: E402
 from backend.core.conf.settings import SETTINGS  # noqa: E402
@@ -58,12 +58,15 @@ from backend.core.exceptions.handlers import (  # noqa: E402
     unhandled_exception_handler,
     validation_exception_handler,
 )
+from backend.core.infrastructure.admin import setup_admin_panel  # noqa: E402
 from backend.core.infrastructure.container import InfrastructureContainer, shutdown_infrastructure  # noqa: E402
 from backend.core.infrastructure.database.error_handler import is_auth_error, is_dns_resolution_error  # noqa: E402
+from backend.core.infrastructure.identity_kit import create_identity_kit  # noqa: E402
 from backend.core.observability.metrics import setup_metrics  # noqa: E402
 from backend.core.observability.tracing import setup_tracing  # noqa: E402
 from backend.core.security.rate_limiting import limiter, rate_limit_exceeded_handler  # noqa: E402
 from backend.features.system import SystemContainer, router as system_router_module, system_router  # noqa: E402
+
 
 logger = structlog.get_logger(__name__)
 
@@ -82,6 +85,7 @@ class Application(FastAPI):
 
     infrastructure_container: InfrastructureContainer
     system_container: SystemContainer
+    identity_kit: IdentityPlanKit
 
 
 # =============================================================================
@@ -164,7 +168,7 @@ async def lifespan(app: Application) -> AsyncGenerator[None, None]:
     Application lifespan context manager.
 
     Handles:
-    - Startup: Database and cache initialization
+    - Startup: Database, cache, and identity kit initialization
     - Shutdown: Graceful cleanup of all infrastructure resources
 
     The ASGI lifespan protocol ensures this runs on worker startup/shutdown.
@@ -174,6 +178,11 @@ async def lifespan(app: Application) -> AsyncGenerator[None, None]:
         # Startup
         await _initialize_database(app)
         await _initialize_cache(app)
+
+        # Initialize identity-plan-kit (uses shared session_factory)
+        await app.identity_kit.startup()
+        logger.info("Identity kit started")
+
         logger.info(
             "Application started",
             app_name=SETTINGS.APP.APP_NAME,
@@ -184,6 +193,13 @@ async def lifespan(app: Application) -> AsyncGenerator[None, None]:
     finally:
         # Shutdown
         logger.info("Starting graceful shutdown")
+
+        # Shutdown identity-plan-kit first
+        try:
+            await app.identity_kit.shutdown()
+            logger.info("Identity kit shutdown completed")
+        except Exception:
+            logger.exception("Error during identity kit shutdown")
 
         try:
             await asyncio.shield(
@@ -233,10 +249,22 @@ def _init_system_container(app: Application) -> None:
     logger.debug("System container initialized")
 
 
+def _init_identity_kit(app: Application) -> None:
+    """Initialize identity-plan-kit with shared database session factory."""
+    # Get the session_factory from the database adapter
+    session_factory = app.infrastructure_container.pg_db().session_factory
+
+    # Create identity kit with shared session factory
+    app.identity_kit = create_identity_kit(session_factory)
+
+    logger.debug("Identity kit initialized with shared session factory")
+
+
 def _init_containers(app: Application) -> None:
     """Initialize all dependency injection containers."""
     _init_infrastructure_container(app)
     _init_system_container(app)
+    _init_identity_kit(app)
 
 
 # =============================================================================
@@ -319,6 +347,52 @@ def _register_routers(app: Application) -> None:
     logger.debug("Routers registered")
 
 
+def _setup_identity_kit(app: Application) -> None:
+    """Setup identity-plan-kit routes and middleware.
+
+    Registers:
+    - Auth routes: /auth/google, /auth/google/callback, /auth/refresh, /auth/logout
+    - Error handlers for auth exceptions
+
+    Note: Health routes are disabled as we use our own at /api/v1/system/*
+    """
+    app.identity_kit.setup(
+        app,
+        register_error_handlers=True,
+        include_health_routes=False,  # We have our own health endpoints
+        include_request_id=False,  # We have our own RequestIdMiddleware
+    )
+
+    logger.debug("Identity kit routes and handlers registered")
+
+
+def _setup_admin_panel(app: Application) -> None:
+    """Setup admin panel with identity-plan-kit models.
+
+    Provides:
+    - User management (view, edit, delete users)
+    - OAuth provider links
+    - Refresh token management
+    - Role and permission management (RBAC)
+    - Subscription plan management
+    - Feature usage tracking
+
+    Admin panel is available at /admin with password authentication.
+    """
+    # Get the database engine from infrastructure container
+    engine = app.infrastructure_container.pg_db().engine
+
+    # Setup admin panel with all identity-plan-kit views
+    setup_admin_panel(
+        app,
+        engine,
+        base_url="/admin",
+        title="Admin Panel",
+    )
+
+    logger.debug("Admin panel configured at /admin")
+
+
 # =============================================================================
 # Observability Setup
 # =============================================================================
@@ -355,7 +429,7 @@ def create_app() -> Application:
 
     app = Application(
         title=SETTINGS.APP.APP_NAME,
-        description="Connect athletes with coaches - marketplace API",
+        description="Production ready API",
         version=SETTINGS.APP.APP_VERSION,
         lifespan=lifespan,
         docs_url=docs_url,
@@ -368,6 +442,8 @@ def create_app() -> Application:
     _configure_middleware(app)
     _configure_exception_handlers(app)
     _register_routers(app)
+    _setup_identity_kit(app)  # Auth routes at /auth/*
+    _setup_admin_panel(app)  # Admin panel at /admin
     _configure_observability(app)
 
     logger.info(

@@ -178,7 +178,7 @@ claude-agents/
 # =============================================================================
 # PROJECT SPECIFIC
 # =============================================================================
-backend/trainer_me_backend.egg-info/
+# Legacy egg-info directory (no longer used)
 backend/prod_ready_backend.egg-info/
 backend/core/conf/envs/
 backend/profiles/
