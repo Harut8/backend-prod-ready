@@ -100,6 +100,14 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         "Invalid token": ("TOKEN_INVALID", "Invalid authentication token."),
         "Not authenticated": ("UNAUTHORIZED", "Authentication required."),
         "User not found": ("USER_NOT_FOUND", "User not found."),
+        # Refresh token errors (401)
+        "Refresh token not provided": ("REFRESH_TOKEN_MISSING", "Refresh token not provided. Please log in again."),
+        "Invalid refresh token": ("REFRESH_TOKEN_INVALID", "Invalid refresh token. Please log in again."),
+        "Refresh token has expired": ("REFRESH_TOKEN_EXPIRED", "Refresh token has expired. Please log in again."),
+        # OAuth errors (401)
+        "OAuth authentication failed": ("OAUTH_ERROR", "OAuth authentication failed."),
+        "Invalid OAuth state": ("OAUTH_STATE_INVALID", "Invalid OAuth state. Please try again."),
+        "OAuth provider error": ("OAUTH_PROVIDER_ERROR", "OAuth provider error. Please try again."),
         # Auth errors (403)
         "User account is inactive": ("USER_INACTIVE", "Your account has been deactivated."),
     }
