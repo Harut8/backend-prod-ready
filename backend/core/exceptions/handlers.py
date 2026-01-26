@@ -110,7 +110,31 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         "OAuth provider error": ("OAUTH_PROVIDER_ERROR", "OAuth provider error. Please try again."),
         # Auth errors (403)
         "User account is inactive": ("USER_INACTIVE", "Your account has been deactivated."),
+        # Plan errors (403)
+        "Plan has expired": ("PLAN_EXPIRED", "Your subscription plan has expired."),
+        "No active plan found": ("USER_PLAN_NOT_FOUND", "No active subscription plan found."),
     }
+
+    # Check for dynamic feature not available messages (format: "Feature 'X' not available")
+    if detail and detail.startswith("Feature '") and detail.endswith("' not available"):
+        feature_code = detail[9:-15]  # Extract feature code: "Feature '" = 9, "' not available" = 15
+        logger.info(
+            "Feature not available via HTTPException",
+            path=path,
+            method=request.method,
+            feature=feature_code,
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": False,
+                "error": {
+                    "code": "FEATURE_NOT_AVAILABLE",
+                    "message": f"This feature requires an upgraded plan.",
+                    "context": {"feature": feature_code},
+                },
+            },
+        )
 
     # Check if this is a known IPK error
     if detail in ipk_error_mapping:

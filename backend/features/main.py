@@ -79,6 +79,8 @@ from backend.core.infrastructure.identity_kit import create_identity_kit  # noqa
 from backend.core.observability.metrics import setup_metrics  # noqa: E402
 from backend.core.observability.tracing import setup_tracing  # noqa: E402
 from backend.core.security.rate_limiting import limiter, rate_limit_exceeded_handler  # noqa: E402
+from backend.features.ai_generation import AiGenerationContainer, ai_generation_router  # noqa: E402
+from backend.features.ai_generation.handlers import generation_handler as ai_generation_handler_module  # noqa: E402
 from backend.features.system import SystemContainer, router as system_router_module, system_router  # noqa: E402
 
 
@@ -99,6 +101,7 @@ class Application(FastAPI):
 
     infrastructure_container: InfrastructureContainer
     system_container: SystemContainer
+    ai_generation_container: AiGenerationContainer
     identity_kit: IdentityPlanKit
 
 
@@ -274,10 +277,22 @@ def _init_identity_kit(app: Application) -> None:
     logger.debug("Identity kit initialized with shared session factory")
 
 
+def _init_ai_generation_container(app: Application) -> None:
+    """Initialize AI generation feature container."""
+    app.ai_generation_container = AiGenerationContainer()
+
+    app.ai_generation_container.wire(
+        modules=[ai_generation_handler_module],
+    )
+
+    logger.debug("AI generation container initialized")
+
+
 def _init_containers(app: Application) -> None:
     """Initialize all dependency injection containers."""
     _init_infrastructure_container(app)
     _init_system_container(app)
+    _init_ai_generation_container(app)
     _init_identity_kit(app)
 
 
@@ -372,6 +387,13 @@ def _register_routers(app: Application) -> None:
         system_router,
         prefix=api_prefix,
         tags=["System"],
+    )
+
+    # AI Generation routes (demonstrates IPK integration)
+    app.include_router(
+        ai_generation_router,
+        prefix=api_prefix,
+        tags=["AI Generation"],
     )
 
     logger.debug("Routers registered")

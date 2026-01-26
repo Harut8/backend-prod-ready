@@ -38,18 +38,23 @@ def get_user_id_or_ip(request: Request) -> str:
     This allows authenticated users to have rate limits tied to their account
     while unauthenticated users are rate-limited by IP address.
     """
+    # Import JWTTokenError at function level so it's always defined for except clause
+    from backend.core.exceptions.jwt_exceptions import JWTTokenError  # noqa: PLC0415
+
     # Try to get user ID from token
     _auth_header = request.headers.get("Authorization")
     if _auth_header and _auth_header.startswith("Bearer "):
         try:
             # Lazy import to avoid circular dependency
             from backend.core.auth.jwt import jwt_decode  # noqa: PLC0415
-            from backend.core.exceptions.jwt_exceptions import JWTTokenError  # noqa: PLC0415
 
             _token = _auth_header.split(" ")[1]
             _payload = jwt_decode(_token)
             if _payload and "user_id" in _payload:
                 return f"user:{_payload['user_id']}"
+        except ImportError:
+            # jwt module not available, fall through to IP-based rate limiting
+            logger.debug("JWT module not available for rate limiting")
         except JWTTokenError as e:
             # Handle all JWT-related exceptions (expired, invalid, malformed, etc.)
             logger.debug("Failed to decode token for rate limiting", error=str(e))
