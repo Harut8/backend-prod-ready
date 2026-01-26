@@ -57,7 +57,7 @@ dependencies = [
   "opentelemetry-instrumentation-sqlalchemy>=0.45b0", # SQLAlchemy instrumentation
   "opentelemetry-instrumentation-redis>=0.45b0", # Redis instrumentation
   "opentelemetry-exporter-otlp>=1.24.0", # OTLP exporter for tracing backends
-  "identity-plan-kit[admin]>=0.1.1",  # Authentication, RBAC, and subscription plan management with admin panel
+  "identity-plan-kit[admin]>=0.1.2",  # Authentication, RBAC, and subscription plan management with admin panel
   "sqladmin>=0.20.0",  # SQLAdmin for database admin interface
 ]
 

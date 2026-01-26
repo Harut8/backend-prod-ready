@@ -53,9 +53,23 @@ from backend.core.api.middleware.request_id import RequestIdMiddleware  # noqa: 
 from backend.core.conf.settings import SETTINGS  # noqa: E402
 from backend.core.domain.exceptions import DomainError  # noqa: E402
 from backend.core.exceptions.handlers import (  # noqa: E402
+    IPK_EXCEPTION_HANDLERS,
+    auth_error_handler,
     domain_exception_handler,
+    feature_not_available_handler,
     http_exception_handler,
+    ipk_base_error_handler,
+    ipk_user_not_found_handler,
+    permission_denied_handler,
+    plan_expired_handler,
+    plan_not_found_handler,
+    quota_exceeded_handler,
+    role_not_found_handler,
+    token_expired_handler,
+    token_invalid_handler,
     unhandled_exception_handler,
+    user_inactive_handler,
+    user_plan_not_found_handler,
     validation_exception_handler,
 )
 from backend.core.infrastructure.admin import setup_admin_panel  # noqa: E402
@@ -322,6 +336,22 @@ def _configure_exception_handlers(app: Application) -> None:
     # Domain exceptions (business rule violations)
     app.add_exception_handler(DomainError, domain_exception_handler)
 
+    # Identity Plan Kit exceptions (auth, RBAC, plans)
+    # Register specific handlers before base handlers for proper exception hierarchy
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["TokenExpiredError"], token_expired_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["TokenInvalidError"], token_invalid_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["UserInactiveError"], user_inactive_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["IPKUserNotFoundError"], ipk_user_not_found_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["AuthError"], auth_error_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["PermissionDeniedError"], permission_denied_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["RoleNotFoundError"], role_not_found_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["QuotaExceededError"], quota_exceeded_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["PlanExpiredError"], plan_expired_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["FeatureNotAvailableError"], feature_not_available_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["UserPlanNotFoundError"], user_plan_not_found_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["PlanNotFoundError"], plan_not_found_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["IPKBaseError"], ipk_base_error_handler)
+
     # Catch-all for unhandled exceptions (must be last)
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
@@ -352,18 +382,20 @@ def _setup_identity_kit(app: Application) -> None:
 
     Registers:
     - Auth routes: /auth/google, /auth/google/callback, /auth/refresh, /auth/logout
-    - Error handlers for auth exceptions
 
-    Note: Health routes are disabled as we use our own at /api/v1/system/*
+    Note:
+    - Health routes are disabled as we use our own at /api/v1/system/*
+    - Error handlers are disabled - we use our own handlers in _configure_exception_handlers
+      to maintain consistent error response format across the entire API
     """
     app.identity_kit.setup(
         app,
-        register_error_handlers=True,
+        register_error_handlers=False,  # Use our handlers for consistent error format
         include_health_routes=False,  # We have our own health endpoints
         include_request_id=False,  # We have our own RequestIdMiddleware
     )
 
-    logger.debug("Identity kit routes and handlers registered")
+    logger.debug("Identity kit routes registered")
 
 
 def _setup_admin_panel(app: Application) -> None:

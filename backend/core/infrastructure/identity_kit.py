@@ -117,6 +117,10 @@ def create_identity_kit_config() -> IdentityPlanKitConfig:
         # Usage Tracking
         # =================================================================
         enable_usage_tracking=True,
+        # =================================================================
+        # Logging
+        # =================================================================
+        log_level=SETTINGS.APP.LOG_LEVEL,
     )
 
     logger.info(

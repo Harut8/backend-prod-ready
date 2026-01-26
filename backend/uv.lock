@@ -680,7 +680,7 @@ wheels = [
 
 [[package]]
 name = "identity-plan-kit"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -703,9 +703,9 @@ dependencies = [
     { name = "typer" },
     { name = "uuid-utils" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/8f/a6693e0f7506888eed1741dfc4ec740898b72e53fc16440f855bdd4af63e/identity_plan_kit-0.1.1.tar.gz", hash = "sha256:487a207d354780ccf0bf3e97c2b35556dd1aeccea26904ec19e99d8a0d1d389a", size = 354414 }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/a1/633137f880216c13129e60b6bdcdea922bd387200964e9f0c76753f1df61/identity_plan_kit-0.1.2.tar.gz", hash = "sha256:d80f12b00f001af34f39ff44f27870f08964eeafa6bfc4e248350f139b7faa0a", size = 356191 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/dc/0dba29e0beee091d738e2c393c3918086d819850126ffdb1dde113bd8d52/identity_plan_kit-0.1.1-py3-none-any.whl", hash = "sha256:8ffacafc8525c423cfb99620490ff24df4775ac001b2e76e844fd1c45d7eab0e", size = 142468 },
+    { url = "https://files.pythonhosted.org/packages/b7/aa/895e037e329d7e57aecceaf6130e654f00dbd7900c09cb7d29d93102afb6/identity_plan_kit-0.1.2-py3-none-any.whl", hash = "sha256:eedf5bf0ea1d792345727919c9ccbdced70261fc048263e5b753c655f8a92d30", size = 145096 },
 ]
 
 [package.optional-dependencies]
@@ -1233,7 +1233,7 @@ requires-dist = [
     { name = "greenlet", specifier = ">=3.2.4" },
     { name = "gunicorn", specifier = ">=21.2.0" },
     { name = "httpx", specifier = ">=0.28.0" },
-    { name = "identity-plan-kit", extras = ["admin"], specifier = ">=0.1.1" },
+    { name = "identity-plan-kit", extras = ["admin"], specifier = ">=0.1.2" },
     { name = "marshmallow", specifier = ">=4.1.2" },
     { name = "opentelemetry-api", specifier = ">=1.24.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.24.0" },
