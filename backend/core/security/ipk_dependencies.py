@@ -17,6 +17,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from identity_plan_kit import IdentityPlanKit
 from identity_plan_kit.auth.domain.entities import User
 
+from backend.core.exceptions import AuthenticationFailedError
+
 
 # Reusable bearer scheme (optional, won't raise on missing token)
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -45,10 +47,8 @@ async def get_current_user(
         TokenInvalidError: If token is invalid
         UserNotFoundError: If user doesn't exist
         UserInactiveError: If user account is deactivated
-        AuthError: For other auth failures
+        AuthenticationFailedError: For other auth failures
     """
-    from identity_plan_kit.auth.domain.exceptions import AuthError
-
     # Get token from header or cookie
     token: str | None = None
     if credentials:
@@ -57,7 +57,7 @@ async def get_current_user(
         token = access_token
 
     if not token:
-        raise AuthError(message="Not authenticated", code="NOT_AUTHENTICATED")
+        raise AuthenticationFailedError(message="Not authenticated", code="NOT_AUTHENTICATED")
 
     # Get auth service from app state
     kit: IdentityPlanKit = request.app.state.identity_plan_kit
@@ -80,7 +80,7 @@ async def get_optional_user(
 
     Useful for endpoints that work for both authenticated and anonymous users.
     """
-    from identity_plan_kit.auth.domain.exceptions import AuthError
+    from identity_plan_kit.auth.domain.exceptions import AuthError as IPKAuthError
 
     # Get token from header or cookie
     token: str | None = None
@@ -96,7 +96,7 @@ async def get_optional_user(
         kit: IdentityPlanKit = request.app.state.identity_plan_kit
         auth_service = kit.auth_service
         return await auth_service.get_user_from_token(token)
-    except AuthError:
+    except (IPKAuthError, AuthenticationFailedError):
         return None
 
 

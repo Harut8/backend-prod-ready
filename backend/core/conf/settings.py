@@ -1,3 +1,4 @@
+import logging
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -281,15 +282,28 @@ class RateLimitSettings(CustomSettings):
 
 
 class AdminSettings(CustomSettings):
-    ADMIN_USERNAME: str = Field(default="admin", alias="ADMIN_USERNAME")
+    # Primary admin credentials (for superadmin - full CRUD permissions)
+    # Two-tier admin system:
+    #   - Superadmin (ADMIN_EMAIL/PASSWORD): Full CRUD permissions
+    #   - DB Admin (users with 'admin' role): View-only permissions
+    ADMIN_EMAIL: str = Field(
+        default="admin@example.com",
+        alias="ADMIN_EMAIL",
+        description="Superadmin email for admin panel authentication (full CRUD permissions)",
+    )
     ADMIN_PASSWORD: SecretStr = Field(
         alias="ADMIN_PASSWORD",
         description="Admin password - must be explicitly set (no default for security)",
     )
+
+    # IP-based access control
     ADMIN_ALLOWED_IPS: list[str] = Field(
         default=["127.0.0.1", "::1", "192.168.65.1", "172.17.0.1", "10.0.0.1"],
         alias="ADMIN_ALLOWED_IPS",
+        description="IP addresses allowed to access admin panel (empty = allow all)",
     )
+
+    # Session settings
     ADMIN_SESSION_SECRET: SecretStr = Field(
         default_factory=lambda: SecretStr(SECRET_KEY_64),
         alias="ADMIN_SESSION_SECRET",
@@ -316,13 +330,6 @@ class AdminSettings(CustomSettings):
         default=30,
         alias="ADMIN_MFA_TOKEN_VALIDITY_SECONDS",
         description="TOTP token validity window in seconds (standard: 30)",
-    )
-
-
-class GeoIPSettings(AppSettings):
-    GEOIP_DB_PATH: str = Field(
-        default=str(Path(__file__).parent.parent.parent.parent / "cities.mmdb"),
-        alias="GEOIP_DB_PATH",
     )
 
 
@@ -521,7 +528,6 @@ class Settings(BaseModel):
     RATE_LIMIT: RateLimitSettings = Field(default_factory=RateLimitSettings)
     EXTERNAL_API: ExternalAPISettings = Field(default_factory=ExternalAPISettings)
     ADMIN: AdminSettings = Field(default_factory=AdminSettings)
-    GEOIP: GeoIPSettings = Field(default_factory=GeoIPSettings)
     PROFILING: ProfilingSettings = Field(default_factory=ProfilingSettings)
     METRICS: MetricsSettings = Field(default_factory=MetricsSettings)
     TRACING: TracingSettings = Field(default_factory=TracingSettings)

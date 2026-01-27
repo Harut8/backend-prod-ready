@@ -10,7 +10,7 @@ APP_PORT := 8000
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-.PHONY: help env-setup install dev prod shell lint format security secrets check migrate migration clean
+.PHONY: help env-setup install dev prod shell lint format security secrets check migrate migration clean create-admin
 
 .DEFAULT_GOAL := help
 
@@ -39,6 +39,9 @@ help:
 	@echo "  migration        Create migration (NAME=description)"
 	@echo "  migrate-preview  Preview migration SQL without applying"
 	@echo "  migrate-check    Check if migrations are up to date"
+	@echo ""
+	@echo "ADMIN:"
+	@echo "  create-admin     Create admin user (EMAIL=x PASSWORD=y)"
 	@echo ""
 	@echo "CLEANUP:"
 	@echo "  clean       Remove containers, volumes, dangling images, caches"
@@ -114,6 +117,16 @@ migrate-preview:
 migrate-check:
 	@echo "Checking if migrations are up to date..."
 	@cd backend && POSTGRES_HOST=localhost DATABASE_URL="" uv run alembic check || echo "Migrations need to be updated!"
+
+# =============================================================================
+# ADMIN
+# =============================================================================
+create-admin:
+	@if [ -z "$(EMAIL)" ] || [ -z "$(PASSWORD)" ]; then \
+		echo "Usage: make create-admin EMAIL=admin@example.com PASSWORD=SecurePass123!"; \
+		exit 1; \
+	fi
+	@cd backend && PYTHONPATH=.. uv run python scripts/create_admin.py --email "$(EMAIL)" --password "$(PASSWORD)"
 
 # =============================================================================
 # CLEANUP

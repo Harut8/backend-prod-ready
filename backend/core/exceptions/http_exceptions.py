@@ -60,21 +60,42 @@ class ServiceException(HTTPException):
         """Return a developer-friendly string representation."""
         return f"{self.__class__.__name__}(code={self.code}, status_code={self.status_code}, message={self.message!r})"
 
-    def to_response(self, *, exclude_none: bool = True) -> JSONResponse:
-        """Convert exception to JSONResponse.
-
-        Args:
-            exclude_none: If True, exclude None values from the response payload.
+    def to_response(self) -> JSONResponse:
+        """Convert exception to JSONResponse in standard API format.
 
         Returns:
-            JSONResponse with the exception details.
+            JSONResponse with the exception details in the format:
+            {
+                "success": false,
+                "error": {
+                    "code": "ERROR_CODE",
+                    "message": "Human-readable message",
+                    "context": { ... }  # optional
+                }
+            }
         """
-        if exclude_none:
-            return JSONResponse(
-                status_code=self.status_code,
-                content={"detail": {k: v for k, v in self.payload.items() if v is not None}},
-            )
-        return JSONResponse(status_code=self.status_code, content={"detail": self.payload})
+        error_content: dict[str, Any] = {
+            "code": str(self.code),
+            "message": self.message,
+        }
+
+        # Build context from meta and errors
+        context: dict[str, Any] = {}
+        if self.meta:
+            context.update(self.meta)
+        if "errors" in self.payload:
+            context["errors"] = self.payload["errors"]
+
+        if context:
+            error_content["context"] = context
+
+        return JSONResponse(
+            status_code=self.status_code,
+            content={
+                "success": False,
+                "error": error_content,
+            },
+        )
 
 
 class RequestError(ServiceException):

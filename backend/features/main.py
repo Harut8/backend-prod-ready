@@ -52,8 +52,10 @@ from backend.core.api.middleware.admission_control import AdmissionControlMiddle
 from backend.core.api.middleware.request_id import RequestIdMiddleware  # noqa: E402
 from backend.core.conf.settings import SETTINGS  # noqa: E402
 from backend.core.domain.exceptions import DomainError  # noqa: E402
+from backend.core.exceptions import KinoneeErrorFormatter  # noqa: E402
 from backend.core.exceptions.handlers import (  # noqa: E402
     IPK_EXCEPTION_HANDLERS,
+    ServiceException,
     auth_error_handler,
     domain_exception_handler,
     feature_not_available_handler,
@@ -65,6 +67,7 @@ from backend.core.exceptions.handlers import (  # noqa: E402
     plan_not_found_handler,
     quota_exceeded_handler,
     role_not_found_handler,
+    service_exception_handler,
     token_expired_handler,
     token_invalid_handler,
     unhandled_exception_handler,
@@ -345,6 +348,9 @@ def _configure_exception_handlers(app: Application) -> None:
     # Rate limiting
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
+    # Service exceptions (our app's HTTP exceptions - must be before HTTPException)
+    app.add_exception_handler(ServiceException, service_exception_handler)
+
     # HTTP exceptions (404, 405, etc.)
     app.add_exception_handler(HTTPException, http_exception_handler)
 
@@ -409,12 +415,14 @@ def _setup_identity_kit(app: Application) -> None:
     - Health routes are disabled as we use our own at /api/v1/system/*
     - Error handlers are disabled - we use our own handlers in _configure_exception_handlers
       to maintain consistent error response format across the entire API
+    - Custom error formatter ensures IKP errors match our response format
     """
     app.identity_kit.setup(
         app,
         register_error_handlers=False,  # Use our handlers for consistent error format
         include_health_routes=False,  # We have our own health endpoints
         include_request_id=False,  # We have our own RequestIdMiddleware
+        error_formatter=KinoneeErrorFormatter(),  # Match our error response format
     )
 
     logger.debug("Identity kit routes registered")
@@ -431,15 +439,23 @@ def _setup_admin_panel(app: Application) -> None:
     - Subscription plan management
     - Feature usage tracking
 
+    Admin roles (from IKP):
+    - Superadmin: Full permissions (create, edit, delete) - from ADMIN_EMAIL/PASSWORD
+    - Admin: View-only permissions - users with 'admin' role in database
+
     Admin panel is available at /admin with password authentication.
     """
-    # Get the database engine from infrastructure container
-    engine = app.infrastructure_container.pg_db().engine
+    # Get the database engine and session factory from infrastructure container
+    pg_db = app.infrastructure_container.pg_db()
+    engine = pg_db.engine
+    session_factory = pg_db.session_factory
 
     # Setup admin panel with all identity-plan-kit views
+    # Pass session_factory to enable DB admin authentication (view-only admins)
     setup_admin_panel(
         app,
         engine,
+        session_factory=session_factory,
         base_url="/admin",
         title="Admin Panel",
     )

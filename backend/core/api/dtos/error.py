@@ -27,7 +27,8 @@ class ErrorDetail(BaseResponseDto):
         {
             "code": "NOT_FOUND",
             "message": "User not found",
-            "target": "user_id"
+            "target": "user_id",
+            "context": {"resource": "user", "id": "123"}
         }
     """
 
@@ -49,9 +50,9 @@ class ErrorDetail(BaseResponseDto):
         examples=["user_id", "email", "password"],
     )
 
-    details: dict[str, Any] | None = Field(
+    context: dict[str, Any] | None = Field(
         default=None,
-        description="Additional error details",
+        description="Additional error context",
         examples=[{"min_length": 8, "actual_length": 5}],
     )
 
@@ -174,7 +175,7 @@ class ErrorResponse(BaseResponseDto):
         message: str,
         *,
         target: str | None = None,
-        details: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
         request_id: str | None = None,
         path: str | None = None,
     ) -> "ErrorResponse":
@@ -185,7 +186,7 @@ class ErrorResponse(BaseResponseDto):
             code: Machine-readable error code
             message: Human-readable error message
             target: The target of the error (optional)
-            details: Additional error details (optional)
+            context: Additional error context (optional)
             request_id: Request ID for tracking (optional)
             path: Request path (optional)
 
@@ -197,7 +198,7 @@ class ErrorResponse(BaseResponseDto):
                 code=code,
                 message=message,
                 target=target,
-                details=details,
+                context=context,
             ),
             request_id=request_id,
             path=path,
@@ -222,13 +223,13 @@ class ErrorResponse(BaseResponseDto):
             path: Request path (optional)
 
         Returns:
-            ErrorResponse with validation details
+            ErrorResponse with validation context
         """
         return cls(
             error=ErrorDetail(
                 code="VALIDATION_ERROR",
                 message=message,
-                details={"errors": [e.model_dump() for e in errors]},
+                context={"errors": [e.model_dump() for e in errors]},
             ),
             request_id=request_id,
             path=path,
