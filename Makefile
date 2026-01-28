@@ -76,12 +76,12 @@ shell:
 # CODE QUALITY
 # =============================================================================
 lint:
-	@cd backend && uv run ruff check core/ features/ --fix
+	@cd backend && uv run ruff check core/ features/ --fix --unsafe-fixes
 	@cd backend && uv run mypy core/ features/
 
 format:
 	@cd backend && uv run ruff format core/ features/
-	@cd backend && uv run ruff check --fix core/ features/
+	@cd backend && uv run ruff check --fix --unsafe-fixes core/ features/
 
 security:
 	@cd backend && uv run bandit -r core/ features/ -ll

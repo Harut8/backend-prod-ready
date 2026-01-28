@@ -10,6 +10,7 @@ from structlog.stdlib import LoggerFactory
 from structlog.types import EventDict, WrappedLogger
 import yaml  # type: ignore [import-untyped]
 
+
 if TYPE_CHECKING:
     from backend.core.conf.settings import Settings
 
@@ -110,7 +111,7 @@ def _adjust_log_paths(config: dict[str, Any]) -> dict[str, Any]:
     log_dir = _get_log_directory()
 
     handlers = config.get("handlers", {})
-    for handler_name, handler_config in handlers.items():
+    for handler_config in handlers.values():
         if "filename" in handler_config:
             original_path = Path(handler_config["filename"])
             # Replace /app/logs/ with the appropriate directory
@@ -285,9 +286,7 @@ def configure_logging() -> None:
     ]
 
     structlog.configure(
-        processors=_shared_processors + [
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
+        processors=[*_shared_processors, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=False,  # Don't cache yet - we may reconfigure
@@ -309,9 +308,7 @@ def configure_logging() -> None:
 
     # Step 5: Reconfigure structlog with final settings and enable caching
     structlog.configure(
-        processors=_shared_processors + [
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
+        processors=[*_shared_processors, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,

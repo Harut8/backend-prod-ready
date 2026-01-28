@@ -37,7 +37,7 @@ def _get_environment() -> Environment:
 
 def _is_production() -> bool:
     """Check if running in production environment."""
-    return SETTINGS.APP.ENVIRONMENT == "prod"
+    return SETTINGS.APP.ENVIRONMENT == "prod"  # type: ignore [no-any-return]
 
 
 def create_identity_kit_config() -> IdentityPlanKitConfig:
@@ -80,7 +80,6 @@ def create_identity_kit_config() -> IdentityPlanKitConfig:
         redis_url=SETTINGS.REDIS.REDIS_URL if _is_production() else None,
         require_redis=_is_production(),  # In-memory store OK for local/dev
         # =================================================================
-        # Cookies (secure in production)
         # =================================================================
         cookie_secure=_is_production(),
         cookie_samesite="lax",

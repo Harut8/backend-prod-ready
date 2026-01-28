@@ -57,8 +57,6 @@ __all__ = [
     "DatabaseTimeoutError",
     # Error Codes
     "ErrorCode",
-    # Error Formatter
-    "KinoneeErrorFormatter",
     # HTTP 5xx Errors
     "InternalServerError",
     "JWTExpiredSignatureError",
@@ -66,6 +64,8 @@ __all__ = [
     "JWTMissingTokenError",
     # JWT Errors
     "JWTTokenError",
+    # Error Formatter
+    "KinoneeErrorFormatter",
     "MethodNotAllowedError",
     "NotFoundError",
     "PermissionDeniedError",

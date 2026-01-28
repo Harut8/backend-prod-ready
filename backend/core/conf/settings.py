@@ -1,5 +1,5 @@
-import logging
 from functools import lru_cache
+import logging
 import os
 from pathlib import Path
 import re
@@ -110,9 +110,7 @@ class AppSettings(CustomSettings):
 class PgDbSettings(AppSettings):
     POSTGRES_ENGINE: str = Field(default="postgresql+asyncpg", alias="POSTGRES_ENGINE")
     POSTGRES_USER: str = Field(default="prod_user", alias="POSTGRES_USER")
-    POSTGRES_PASSWORD: SecretStr = Field(
-        default_factory=lambda: SecretStr("prod_password"), alias="POSTGRES_PASSWORD"
-    )
+    POSTGRES_PASSWORD: SecretStr = Field(default_factory=lambda: SecretStr("prod_password"), alias="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field(default="prod_ready_db", alias="POSTGRES_DB")
     POSTGRES_HOST: str = Field(default="postgres", alias="POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, alias="POSTGRES_PORT")
@@ -249,16 +247,16 @@ class RateLimitSettings(CustomSettings):
     # Example configurations by deployment type:
     #
     # AWS ALB only:
-    #   TRUSTED_PROXY_CIDRS=["10.0.0.0/16"]  # Your VPC CIDR only
+    #   TRUSTED_PROXY_CIDRS=["10.0.0.0/16"]  # Your VPC CIDR only  # noqa: ERA001
     #
     # AWS ALB + Cloudflare:
-    #   TRUSTED_PROXY_CIDRS=["10.0.0.0/16", "173.245.48.0/20", "103.21.244.0/22", ...]
+    #   TRUSTED_PROXY_CIDRS=["10.0.0.0/16", "173.245.48.0/20", "103.21.244.0/22", ...]  # noqa: ERA001
     #
     # Kubernetes (internal):
-    #   TRUSTED_PROXY_CIDRS=["10.244.0.0/16"]  # Your pod CIDR only
+    #   TRUSTED_PROXY_CIDRS=["10.244.0.0/16"]  # Your pod CIDR only  # noqa: ERA001
     #
     # Direct nginx (no proxy):
-    #   TRUSTED_PROXY_CIDRS=["127.0.0.1/32"]  # Localhost only
+    #   TRUSTED_PROXY_CIDRS=["127.0.0.1/32"]  # Localhost only  # noqa: ERA001
     #
     TRUSTED_PROXY_CIDRS: list[str] = Field(
         default=[
@@ -276,7 +274,8 @@ class RateLimitSettings(CustomSettings):
             # Configure your specific infrastructure CIDRs explicitly.
         ],
         alias="TRUSTED_PROXY_CIDRS",
-        description="CIDR ranges of trusted reverse proxies for X-Forwarded-For validation. MUST be explicitly configured for production!",
+        description="CIDR ranges of trusted reverse proxies for X-Forwarded-For validation. \n"
+        "MUST be explicitly configured for production!",
     )
 
 
@@ -654,9 +653,9 @@ class Settings(BaseModel):
         # Overly broad CIDRs that are dangerous in production
         # These allow any attacker on the network to spoof X-Forwarded-For
         _overly_broad_cidrs = {
-            "10.0.0.0/8",      # Entire 10.x.x.x range - too broad
+            "10.0.0.0/8",  # Entire 10.x.x.x range - too broad
             "192.168.0.0/16",  # Entire 192.168.x.x range - too broad
-            "172.16.0.0/12",   # Entire 172.16-31.x.x range - too broad
+            "172.16.0.0/12",  # Entire 172.16-31.x.x range - too broad
         }
 
         _configured_cidrs = set(self.RATE_LIMIT.TRUSTED_PROXY_CIDRS)
@@ -668,7 +667,7 @@ class Settings(BaseModel):
                 "Default CIDRs only include localhost and Docker networks. "
                 "Configure your specific infrastructure CIDRs (AWS ALB, Cloudflare, etc.) "
                 "to prevent X-Forwarded-For header spoofing attacks. "
-                "Example: TRUSTED_PROXY_CIDRS=[\"10.0.0.0/16\"] for AWS VPC."
+                'Example: TRUSTED_PROXY_CIDRS=["10.0.0.0/16"] for AWS VPC.'
             )
             raise ValueError(_msg)
 

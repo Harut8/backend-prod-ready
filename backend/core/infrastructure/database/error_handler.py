@@ -242,7 +242,7 @@ def is_dns_resolution_error(exception: BaseException) -> bool:
     """Check if exception is a DNS resolution error (non-retryable)."""
     if isinstance(exception, socket.gaierror):
         # gaierror errno 8 = EAI_NONAME (hostname not found)
-        return exception.args[0] == 8
+        return exception.args[0] == 8  # type: ignore [no-any-return]
     return False
 
 

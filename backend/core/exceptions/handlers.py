@@ -10,6 +10,8 @@ Includes handlers for:
 - Identity Plan Kit exceptions (auth, RBAC, plans)
 """
 
+from typing import Any
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from identity_plan_kit.auth.domain.exceptions import (
@@ -35,25 +37,6 @@ from identity_plan_kit.shared.exceptions import BaseError as IPKBaseError
 from starlette.exceptions import HTTPException
 import structlog
 
-
-# Re-export IPK exception types for use in main.py
-IPK_EXCEPTION_HANDLERS = {
-    "TokenExpiredError": TokenExpiredError,
-    "TokenInvalidError": TokenInvalidError,
-    "UserInactiveError": UserInactiveError,
-    "IPKUserNotFoundError": IPKUserNotFoundError,
-    "AuthError": AuthError,
-    "PermissionDeniedError": PermissionDeniedError,
-    "RoleNotFoundError": RoleNotFoundError,
-    "QuotaExceededError": QuotaExceededError,
-    "PlanExpiredError": PlanExpiredError,
-    "PlanAuthorizationError": PlanAuthorizationError,
-    "FeatureNotAvailableError": FeatureNotAvailableError,
-    "UserPlanNotFoundError": UserPlanNotFoundError,
-    "PlanNotFoundError": PlanNotFoundError,
-    "IPKBaseError": IPKBaseError,
-}
-
 from backend.core.domain.exceptions import (
     DomainAuthorizationError,
     DomainConflictError,
@@ -74,6 +57,24 @@ from backend.core.exceptions.error_to_response import (
 from backend.core.exceptions.http_exceptions import ServiceException
 
 
+# Re-export IPK exception types for use in main.py
+IPK_EXCEPTION_HANDLERS = {
+    "TokenExpiredError": TokenExpiredError,
+    "TokenInvalidError": TokenInvalidError,
+    "UserInactiveError": UserInactiveError,
+    "IPKUserNotFoundError": IPKUserNotFoundError,
+    "AuthError": AuthError,
+    "PermissionDeniedError": PermissionDeniedError,
+    "RoleNotFoundError": RoleNotFoundError,
+    "QuotaExceededError": QuotaExceededError,
+    "PlanExpiredError": PlanExpiredError,
+    "PlanAuthorizationError": PlanAuthorizationError,
+    "FeatureNotAvailableError": FeatureNotAvailableError,
+    "UserPlanNotFoundError": UserPlanNotFoundError,
+    "PlanNotFoundError": PlanNotFoundError,
+    "IPKBaseError": IPKBaseError,
+}
+
 logger = structlog.get_logger(__name__)
 
 
@@ -81,7 +82,7 @@ def _build_error_response(
     status_code: int,
     code: str | ErrorCode,
     message: str,
-    context: dict | None = None,
+    context: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """
     Build a standard error response.
@@ -96,7 +97,7 @@ def _build_error_response(
         JSONResponse in standard format:
         {"success": false, "error": {"code": "...", "message": "...", "context": {...}}}
     """
-    error_content: dict = {
+    error_content: dict[str, Any] = {
         "code": str(code),
         "message": message,
     }
@@ -141,9 +142,15 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         "Not authenticated": (ErrorCode.UNAUTHORIZED, "Authentication required."),
         "User not found": (ErrorCode.USER_NOT_FOUND, "User not found."),
         # Refresh token errors (401)
-        "Refresh token not provided": (ErrorCode.REFRESH_TOKEN_MISSING, "Refresh token not provided. Please log in again."),
+        "Refresh token not provided": (
+            ErrorCode.REFRESH_TOKEN_MISSING,
+            "Refresh token not provided. Please log in again.",
+        ),
         "Invalid refresh token": (ErrorCode.REFRESH_TOKEN_INVALID, "Invalid refresh token. Please log in again."),
-        "Refresh token has expired": (ErrorCode.REFRESH_TOKEN_EXPIRED, "Refresh token has expired. Please log in again."),
+        "Refresh token has expired": (
+            ErrorCode.REFRESH_TOKEN_EXPIRED,
+            "Refresh token has expired. Please log in again.",
+        ),
         # OAuth errors (401)
         "OAuth authentication failed": (ErrorCode.OAUTH_ERROR, "OAuth authentication failed."),
         "Invalid OAuth state": (ErrorCode.OAUTH_STATE_INVALID, "Invalid OAuth state. Please try again."),
@@ -246,7 +253,7 @@ async def service_exception_handler(request: Request, exc: ServiceException) -> 
         status_code=exc.status_code,
         error_code=str(exc.code),
     )
-    return exc.to_response()
+    return exc.to_response()  # type: ignore [no-any-return]
 
 
 # =============================================================================

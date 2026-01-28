@@ -17,7 +17,6 @@ import ipaddress
 from typing import TYPE_CHECKING
 
 from identity_plan_kit.admin import AdminAuthBackend as IPKAdminAuthBackend
-from starlette.requests import Request
 from starlette.responses import RedirectResponse
 import structlog
 
@@ -27,6 +26,7 @@ from backend.core.security.proxy_validation import extract_client_ip_secure
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
+    from starlette.requests import Request
 
 
 logger = structlog.get_logger(__name__)
@@ -52,26 +52,26 @@ def _parse_admin_allowed_ips(
     networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
 
     for entry in allowed_ips:
-        entry = entry.strip()
-        if not entry:
+        _entry = entry.strip()
+        if not _entry:
             continue
 
         # Check if it's a CIDR notation
-        if "/" in entry:
+        if "/" in _entry:
             try:
-                network = ipaddress.ip_network(entry, strict=False)
+                network = ipaddress.ip_network(_entry, strict=False)
                 networks.append(network)
-                logger.debug("Parsed admin CIDR allowlist entry", cidr=entry)
+                logger.debug("Parsed admin CIDR allowlist entry", cidr=_entry)
             except ValueError as e:
-                logger.warning("Invalid CIDR in ADMIN_ALLOWED_IPS", entry=entry, error=str(e))
+                logger.warning("Invalid CIDR in ADMIN_ALLOWED_IPS", entry=_entry, error=str(e))
         else:
             # Exact IP match
             try:
                 # Validate it's a valid IP
-                ipaddress.ip_address(entry)
-                exact_ips.add(entry)
+                ipaddress.ip_address(_entry)
+                exact_ips.add(_entry)
             except ValueError as e:
-                logger.warning("Invalid IP in ADMIN_ALLOWED_IPS", entry=entry, error=str(e))
+                logger.warning("Invalid IP in ADMIN_ALLOWED_IPS", entry=_entry, error=str(e))
 
     return exact_ips, tuple(networks)
 
@@ -101,7 +101,7 @@ class AdminAuthBackend(IPKAdminAuthBackend):
         secret_key: str,
         admin_email: str | None = None,
         admin_password: str | None = None,
-        session_factory: "async_sessionmaker | None" = None,
+        session_factory: async_sessionmaker | None = None,
     ) -> None:
         """
         Initialize the admin authentication backend.
@@ -163,7 +163,7 @@ class AdminAuthBackend(IPKAdminAuthBackend):
                     client_ip=self._get_client_ip(request),
                 )
 
-        return result
+        return result  # type: ignore [no-any-return]
 
     async def logout(self, request: Request) -> bool:
         """
@@ -184,7 +184,7 @@ class AdminAuthBackend(IPKAdminAuthBackend):
             client_ip=client_ip,
         )
 
-        return await super().logout(request)
+        return await super().logout(request)  # type: ignore [no-any-return]
 
     async def authenticate(self, request: Request) -> RedirectResponse | bool:
         """
@@ -228,7 +228,7 @@ class AdminAuthBackend(IPKAdminAuthBackend):
                 status_code=302,
             )
 
-        return await super().authenticate(request)
+        return await super().authenticate(request)  # type: ignore [no-any-return]
 
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP from request securely.
@@ -238,7 +238,7 @@ class AdminAuthBackend(IPKAdminAuthBackend):
         """
         x_forwarded_for = request.headers.get("X-Forwarded-For")
         direct_ip = request.client.host if request.client else None
-        return extract_client_ip_secure(x_forwarded_for, direct_ip)
+        return extract_client_ip_secure(x_forwarded_for, direct_ip)  # type: ignore [no-any-return]
 
     def _check_ip_allowed(self, request: Request) -> bool:
         """Check if client IP is in allowed list (supports exact IPs and CIDR ranges).

@@ -5,12 +5,13 @@ Handles conversions between domain objects and DTOs for the AI generation featur
 Following Clean Architecture, mappers provide explicit layer boundary conversions.
 """
 
+from identity_plan_kit.plans.dto.usage import UsageInfo
+
 from backend.features.ai_generation.domain.generation import TextGeneration
 from backend.features.ai_generation.dto.generation_dto import (
     GenerateTextResponseDto,
     GenerationUsageDto,
 )
-from identity_plan_kit.plans.dto.usage import UsageInfo
 
 
 class GenerationMapper:

@@ -37,8 +37,6 @@ class IdempotencyCacheError(Exception):
     idempotency protection (which could lead to duplicate processing).
     """
 
-    pass
-
 
 # Lua script for atomic idempotency check-and-acquire
 # This prevents race conditions where two concurrent requests both pass
@@ -46,9 +44,7 @@ class IdempotencyCacheError(Exception):
 #
 # KEYS[1] = completed_key (stores the result after processing)
 # KEYS[2] = in_progress_key (lock to prevent concurrent processing)
-# ARGV[1] = in_progress_ttl (seconds)
 #
-# Returns: {status, cached_response}
 # - {"NEW", nil} - First request, proceed with processing
 # - {"DUPLICATE", cached_data} - Already completed, return cached
 # - {"IN_PROGRESS", nil} - Another worker is processing
@@ -222,7 +218,9 @@ class IdempotencyService:
                     return IdempotencyResult(status=IdempotencyStatus.DUPLICATE, cached_response=None)
 
             elif _status == "NEW":
-                logger.debug("Idempotency check - new operation (lock acquired atomically)", key=key, namespace=namespace)
+                logger.debug(
+                    "Idempotency check - new operation (lock acquired atomically)", key=key, namespace=namespace
+                )
                 return IdempotencyResult(status=IdempotencyStatus.NEW)
 
             elif _status == "IN_PROGRESS":
@@ -231,7 +229,7 @@ class IdempotencyService:
 
         # Lua script returned None - either Redis unavailable or in fallback mode
         # Check if we have in-memory fallback available
-        if self._cache._using_fallback and self._cache._in_memory_cache:
+        if self._cache._using_fallback and self._cache._in_memory_cache:  # noqa: SLF001
             # Fallback mode with in-memory cache - use non-atomic check
             # This has a small race window but is acceptable for development/testing
             logger.warning(
@@ -249,10 +247,11 @@ class IdempotencyService:
                 key=key,
                 namespace=namespace,
             )
-            raise IdempotencyCacheError(
+            msg = (
                 f"Cache unavailable for idempotency check (key={key}, namespace={namespace}). "
                 "Cannot proceed without idempotency protection."
             )
+            raise IdempotencyCacheError(msg)
 
         # Cache is available but Lua script failed for unknown reason
         # Fall back to non-atomic check with warning
@@ -377,11 +376,15 @@ class IdempotencyService:
             This is an expensive operation on large Redis instances.
             Use sparingly, typically from health check or monitoring endpoints.
         """
-        if self._cache._using_fallback or not self._cache._is_redis_available():
+        if self._cache._using_fallback or not self._cache._is_redis_available():  # noqa: SLF001
             # Can't scan in-memory cache efficiently, return -1 to indicate unknown
             return -1
 
-        pattern = f"{self.CACHE_PREFIX}:{namespace}:*{self.IN_PROGRESS_SUFFIX}" if namespace else f"{self.CACHE_PREFIX}:*{self.IN_PROGRESS_SUFFIX}"
+        pattern = (
+            f"{self.CACHE_PREFIX}:{namespace}:*{self.IN_PROGRESS_SUFFIX}"
+            if namespace
+            else f"{self.CACHE_PREFIX}:*{self.IN_PROGRESS_SUFFIX}"
+        )
 
         # Use SCAN to count in-progress keys without blocking
         count = 0
@@ -389,7 +392,7 @@ class IdempotencyService:
 
         try:
             while True:
-                cursor, keys = await self._cache._redis_client.scan(  # type: ignore[union-attr]
+                cursor, keys = await self._cache._redis_client.scan(  # noqa: SLF001
                     cursor=cursor,
                     match=pattern,
                     count=100,
@@ -397,7 +400,7 @@ class IdempotencyService:
                 count += len(keys)
                 if cursor == 0:
                     break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to scan for stuck in-progress markers", error=str(e))
             return -1
 
@@ -432,18 +435,22 @@ class IdempotencyService:
         Returns:
             Number of markers cleaned up
         """
-        if self._cache._using_fallback or not self._cache._is_redis_available():
+        if self._cache._using_fallback or not self._cache._is_redis_available():  # noqa: SLF001
             logger.warning("Cannot cleanup stuck markers - Redis unavailable")
             return 0
 
-        pattern = f"{self.CACHE_PREFIX}:{namespace}:*{self.IN_PROGRESS_SUFFIX}" if namespace else f"{self.CACHE_PREFIX}:*{self.IN_PROGRESS_SUFFIX}"
+        pattern = (
+            f"{self.CACHE_PREFIX}:{namespace}:*{self.IN_PROGRESS_SUFFIX}"
+            if namespace
+            else f"{self.CACHE_PREFIX}:*{self.IN_PROGRESS_SUFFIX}"
+        )
 
         cleaned = 0
         cursor = 0
 
         try:
             while cleaned < max_cleanup:
-                cursor, keys = await self._cache._redis_client.scan(  # type: ignore[union-attr]
+                cursor, keys = await self._cache._redis_client.scan(  # noqa: SLF001
                     cursor=cursor,
                     match=pattern,
                     count=100,
@@ -451,12 +458,12 @@ class IdempotencyService:
                 for key in keys:
                     if cleaned >= max_cleanup:
                         break
-                    await self._cache._redis_client.delete(key)  # type: ignore[union-attr]
+                    await self._cache._redis_client.delete(key)  # noqa: SLF001
                     cleaned += 1
 
                 if cursor == 0:
                     break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed during stuck marker cleanup", error=str(e), cleaned=cleaned)
 
         if cleaned > 0:

@@ -685,11 +685,11 @@ class CacheService:
             return None
 
         async def _lua_operation() -> list[Any] | None:
-            result = await self._redis_client.eval(  # type: ignore[union-attr]
+            result = await self._redis_client.eval(  # type: ignore[union-attr, misc]
                 script,
                 len(keys),
                 *keys,
-                *args,
+                *[str(arg) for arg in args],
             )
             return cast("list[Any] | None", result)
 

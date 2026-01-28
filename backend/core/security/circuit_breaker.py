@@ -66,8 +66,8 @@ class CircuitBreakerRegistry:
         """
         with cls._instance_lock:
             if cls._instance is not None:
-                cls._instance._factories.clear()
-                cls._instance._states.clear()
+                cls._instance._factories.clear()  # noqa: SLF001
+                cls._instance._states.clear()  # noqa: SLF001
             cls._instance = None
         logger.debug("Circuit breaker registry reset")
 
@@ -265,17 +265,18 @@ def observable_circuit_breaker(
     def decorator(_func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @functools.wraps(_func)
         async def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            async with _factory.get_breaker(_breaker_name):
+            async with await _factory.get_breaker(_breaker_name):
                 try:
                     _result = await _func(*args, **kwargs)
                     _registry.log_circuit_success(_breaker_name, _cb_type)
-                    return _result
                 except CircuitBreakerOpen:
                     _registry.log_circuit_open(_breaker_name, _cb_type)
                     raise
                 except Exception as e:
                     _registry.log_circuit_failure(_breaker_name, _cb_type, str(e))
                     raise
+                else:
+                    return _result
 
         return _wrapper
 

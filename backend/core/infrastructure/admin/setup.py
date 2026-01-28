@@ -27,13 +27,13 @@ logger = structlog.get_logger(__name__)
 
 
 def setup_admin_panel(
-    app: "FastAPI",
-    engine: "AsyncEngine",
-    session_factory: "async_sessionmaker | None" = None,
+    app: FastAPI,
+    engine: AsyncEngine,
+    session_factory: async_sessionmaker | None = None,
     *,
     base_url: str = "/admin",
     title: str | None = None,
-) -> "Admin":
+) -> Admin:
     """
     Set up SQLAdmin panel with identity-plan-kit models.
 

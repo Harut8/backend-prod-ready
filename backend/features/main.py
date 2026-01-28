@@ -16,6 +16,7 @@ This module configures and creates the FastAPI application with:
 # loggers are created with the correct configuration (timestamps, colors, etc.)
 
 from backend.core.observability.logging import configure_logging
+from backend.features.system import SystemContainer, system_router
 
 
 configure_logging()
@@ -86,7 +87,6 @@ from backend.core.observability.tracing import setup_tracing  # noqa: E402
 from backend.core.security.rate_limiting import limiter, rate_limit_exceeded_handler  # noqa: E402
 from backend.features.ai_generation import AiGenerationContainer, ai_generation_router  # noqa: E402
 from backend.features.ai_generation.handlers import generation_handler as ai_generation_handler_module  # noqa: E402
-from backend.features.system import SystemContainer, system_router
 from backend.features.system.handlers import health_handler as system_handler_module  # noqa: E402
 
 

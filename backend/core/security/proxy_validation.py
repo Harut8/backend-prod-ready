@@ -48,7 +48,7 @@ def _parse_trusted_networks(
             _networks.append(_network)
         except ValueError as e:
             _msg = f"Invalid CIDR '{_cidr}' in TRUSTED_PROXY_CIDRS: {e}"
-            logger.error("Security configuration error", cidr=_cidr, error=str(e))
+            logger.exception("Security configuration error", cidr=_cidr, error=str(e))
             raise ConfigurationError(_msg) from e
 
     return tuple(_networks)
@@ -189,7 +189,6 @@ def extract_client_ip_secure(
             client_ip=_client_ip,
             direct_ip=direct_ip,
         )
-        return _client_ip
     except ValueError:
         logger.warning(
             "Invalid leftmost IP in X-Forwarded-For header",
@@ -197,3 +196,5 @@ def extract_client_ip_secure(
             extracted_ip=_client_ip,
         )
         return direct_ip
+    else:
+        return _client_ip

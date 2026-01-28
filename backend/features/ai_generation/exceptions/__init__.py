@@ -6,6 +6,8 @@ These exceptions are raised within the feature and translated
 to HTTP errors at the handler layer.
 """
 
+from typing import Any
+
 from backend.core.domain.exceptions import DomainError, DomainValidationError
 
 
@@ -17,7 +19,7 @@ class AiGenerationError(DomainError):
         message: str,
         *,
         code: str | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(
             message,
@@ -34,7 +36,7 @@ class PromptValidationError(DomainValidationError):
         message: str,
         *,
         prompt_length: int | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         ctx = context or {}
         if prompt_length is not None:
@@ -51,7 +53,7 @@ class TokenLimitExceededError(AiGenerationError):
         *,
         requested_tokens: int | None = None,
         max_tokens: int | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         ctx = context or {}
         if requested_tokens is not None:
@@ -70,7 +72,7 @@ class GenerationFailedError(AiGenerationError):
         *,
         model: str | None = None,
         reason: str | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         ctx = context or {}
         if model:
@@ -88,7 +90,7 @@ class QuotaExhaustedError(AiGenerationError):
         message: str = "AI generation quota exhausted",
         *,
         user_id: str | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
         ctx = context or {}
         if user_id:

@@ -218,7 +218,7 @@ class BaseUnitOfWork(ABC):
                 timeout=SETTINGS.TIMEOUTS.SESSION_CLOSE_TIMEOUT,
             )
             self._logger.debug("Transaction rolled back")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._logger.warning("Rollback timed out, connection may be in bad state")
             self._timeout_occurred = True
         except (OSError, RuntimeError) as e:
@@ -287,7 +287,7 @@ class BaseUnitOfWork(ABC):
                 timeout=SETTINGS.TIMEOUTS.SESSION_CLOSE_TIMEOUT,
             )
             self._logger.debug("Transaction rolled back")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._logger.warning("Rollback timed out")
             self._timeout_occurred = True
         except Exception as e:

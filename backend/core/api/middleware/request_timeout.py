@@ -12,12 +12,11 @@ timeouts at the repository/service level for more granular control.
 
 import asyncio
 
-from fastapi import Request
+from backend.core.conf.settings import SETTINGS
+from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import structlog
-
-from backend.core.conf.settings import SETTINGS
 
 
 logger = structlog.get_logger(__name__)
@@ -42,7 +41,7 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app,  # type: ignore[no-untyped-def]  # noqa: ANN001
+        app: FastAPI,
         timeout: float | None = None,
     ) -> None:
         super().__init__(app)
@@ -70,9 +69,8 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
                 call_next(request),
                 timeout=self._timeout,
             )
-            return response
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Log the timeout with request context
             logger.warning(
                 "Request timed out",
@@ -110,3 +108,5 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
                 method=request.method,
             )
             raise
+        else:
+            return response

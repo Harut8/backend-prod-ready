@@ -11,17 +11,19 @@ from backend.core.utils.ids import safe_get_id_str
 logger = structlog.get_logger(__name__)
 
 # Fields that should never be logged
-SENSITIVE_FIELDS = frozenset({
-    "password",
-    "token",
-    "secret",
-    "api_key",
-    "authorization",
-    "access_token",
-    "refresh_token",
-    "credential",
-    "private_key",
-})
+SENSITIVE_FIELDS = frozenset(
+    {
+        "password",
+        "token",
+        "secret",
+        "api_key",
+        "authorization",
+        "access_token",
+        "refresh_token",
+        "credential",
+        "private_key",
+    }
+)
 
 
 class ServiceErrorHandler:
@@ -51,7 +53,7 @@ class ServiceErrorHandler:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return await func(*args, **kwargs)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return self._handle_exception(e, func, args, kwargs)
 
         return async_wrapper
@@ -61,7 +63,7 @@ class ServiceErrorHandler:
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return func(*args, **kwargs)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return self._handle_exception(e, func, args, kwargs)
 
         return sync_wrapper
@@ -76,11 +78,13 @@ class ServiceErrorHandler:
 
         # Extract context for structured logging (excluding sensitive fields)
         context = self._extract_context(args, kwargs)
-        context.update({
-            "function": func.__name__,
-            "error": str(exception),
-            "error_type": type(exception).__name__,
-        })
+        context.update(
+            {
+                "function": func.__name__,
+                "error": str(exception),
+                "error_type": type(exception).__name__,
+            }
+        )
 
         # Log the error with appropriate level including full traceback for debugging
         if self._log_level == "exception":
