@@ -64,39 +64,118 @@ def bad_request_exception(request: Request, exc: HTTPException | RequestError) -
     return custom_exc.to_response()
 
 
-def translate_validation_error(error_type: str, error_msg: str, field_path: str) -> str:  # noqa: PLR0911, C901
-    """Translate technical validation error to user-friendly message."""
+def _format_field_path(loc: tuple) -> str:
+    """Format field location into a user-friendly path.
+
+    Handles special cases like:
+    - ('body',) -> 'request body'
+    - ('body', 14) -> 'request body' (14 is char position for JSON errors)
+    - ('body', 'user', 'email') -> 'user.email'
+    - ('query', 'page') -> 'page'
+    - ('path', 'user_id') -> 'user_id'
+    """
+    if not loc:
+        return "request"
+
+    # Filter out 'body', 'query', 'path' prefixes and numeric positions
+    parts = []
+    for part in loc:
+        # Skip location type prefixes
+        if part in ("body", "query", "path", "header", "cookie"):
+            continue
+        # Skip numeric positions (used for JSON parse error positions)
+        if isinstance(part, int):
+            continue
+        parts.append(str(part))
+
+    if not parts:
+        return "request body"
+
+    return ".".join(parts)
+
+
+def translate_validation_error(error_type: str, error_msg: str, field_path: str, loc: tuple | None = None) -> str:  # noqa: PLR0911, C901
+    """Translate technical validation error to user-friendly message.
+
+    Args:
+        error_type: The Pydantic error type (e.g., 'json_invalid', 'missing')
+        error_msg: The original error message
+        field_path: The dot-separated field path
+        loc: The original location tuple for special handling
+    """
+    # Format field path for display
+    display_field = _format_field_path(loc) if loc else field_path
+
     if error_type == "json_invalid":
-        return "Invalid JSON format. Please check your request data and try again."
+        return "The request body contains invalid JSON. Please check for syntax errors like missing quotes, commas, or brackets."
 
     if error_type == "type_error":
         if "str" in error_msg and "int" in error_msg:
-            return f"Field '{field_path}' must be a number, not text."
+            return f"'{display_field}' must be a number, not text."
         if "int" in error_msg and "str" in error_msg:
-            return f"Field '{field_path}' must be text, not a number."
+            return f"'{display_field}' must be text, not a number."
         if "bool" in error_msg:
-            return f"Field '{field_path}' must be true or false."
-        return f"Field '{field_path}' has an invalid data type."
+            return f"'{display_field}' must be true or false."
+        if "none" in error_msg.lower():
+            return f"'{display_field}' cannot be null."
+        return f"'{display_field}' has an invalid data type."
 
     if error_type == "missing":
-        return f"Field '{field_path}' is required."
+        return f"'{display_field}' is required."
 
-    if error_type == "value_error":
-        if "too_short" in error_msg:
-            return f"Field '{field_path}' is too short."
-        if "too_long" in error_msg:
-            return f"Field '{field_path}' is too long."
+    if error_type in ("string_too_short", "string_too_long", "value_error"):
+        if "too_short" in error_msg or error_type == "string_too_short":
+            return f"'{display_field}' is too short."
+        if "too_long" in error_msg or error_type == "string_too_long":
+            return f"'{display_field}' is too long."
         if "invalid" in error_msg:
-            return f"Field '{field_path}' contains an invalid value."
-        return f"Field '{field_path}' has an invalid value."
+            return f"'{display_field}' contains an invalid value."
+        return f"'{display_field}' has an invalid value."
 
     if error_type == "enum":
-        return f"Field '{field_path}' must be one of the allowed values."
+        return f"'{display_field}' must be one of the allowed values."
 
     if error_type == "list_type":
-        return f"Field '{field_path}' must be a list of items."
+        return f"'{display_field}' must be a list."
 
-    return f"Field '{field_path}' has an error: {error_msg}"
+    if error_type == "dict_type":
+        return f"'{display_field}' must be an object."
+
+    if error_type == "string_type":
+        return f"'{display_field}' must be a string."
+
+    if error_type == "int_type":
+        return f"'{display_field}' must be an integer."
+
+    if error_type == "float_type":
+        return f"'{display_field}' must be a number."
+
+    if error_type == "bool_type":
+        return f"'{display_field}' must be true or false."
+
+    if error_type == "url_type" or error_type == "url_parsing":
+        return f"'{display_field}' must be a valid URL."
+
+    if error_type == "email_type" or "email" in error_type:
+        return f"'{display_field}' must be a valid email address."
+
+    if error_type == "uuid_type" or error_type == "uuid_parsing":
+        return f"'{display_field}' must be a valid UUID."
+
+    if error_type == "datetime_type" or error_type == "datetime_parsing":
+        return f"'{display_field}' must be a valid date/time."
+
+    if error_type == "date_type" or error_type == "date_parsing":
+        return f"'{display_field}' must be a valid date."
+
+    if "greater_than" in error_type:
+        return f"'{display_field}' is too small."
+
+    if "less_than" in error_type:
+        return f"'{display_field}' is too large."
+
+    # Fallback with cleaner message
+    return f"'{display_field}' is invalid: {error_msg}"
 
 
 def extract_validation_errors(
@@ -112,11 +191,15 @@ def extract_validation_errors(
     """
     error_details = []
     for error in exc.errors():
-        field_path = ".".join(str(loc) for loc in error["loc"])
+        loc = error["loc"]
         error_type = error["type"]
         error_msg = error["msg"]
-        user_message = translate_validation_error(error_type, error_msg, field_path)
-        error_details.append({"field": field_path, "message": user_message, "type": error_type})
+
+        # Format field path for display (skip 'body', 'query', etc. and numeric positions)
+        display_field = _format_field_path(loc)
+
+        user_message = translate_validation_error(error_type, error_msg, display_field, loc)
+        error_details.append({"field": display_field, "message": user_message, "type": error_type})
     return error_details
 
 
@@ -131,13 +214,24 @@ def validation_exception(
         return exc.to_response()
 
     error_details = extract_validation_errors(exc)
+    error_types = {error["type"] for error in exc.errors()}
 
-    if any(error["type"] == "json_invalid" for error in exc.errors()):
-        overall_message = "Invalid request format. Please check your JSON data."
-    elif any(error["type"] == "missing" for error in exc.errors()):
-        overall_message = "Some required fields are missing."
+    # Generate a descriptive overall message based on error types
+    if "json_invalid" in error_types:
+        overall_message = "Invalid JSON in request body. Please check for syntax errors."
+    elif "missing" in error_types:
+        missing_fields = [e["field"] for e in error_details if e["type"] == "missing"]
+        if len(missing_fields) == 1:
+            overall_message = f"Required field '{missing_fields[0]}' is missing."
+        else:
+            overall_message = f"Required fields are missing: {', '.join(missing_fields)}"
+    elif len(error_details) == 1:
+        # Single error - use its message as the overall message
+        overall_message = error_details[0]["message"]
     else:
-        overall_message = "Please check your input data and try again."
+        # Multiple errors - summarize
+        fields = [e["field"] for e in error_details]
+        overall_message = f"Validation failed for: {', '.join(fields)}"
 
     log_message = (
         "Request validation failed" if isinstance(exc, RequestValidationError) else "Pydantic validation failed"

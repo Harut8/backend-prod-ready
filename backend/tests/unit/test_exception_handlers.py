@@ -1,19 +1,24 @@
 """
 Unit tests for exception handlers.
 
-Tests that IPK exceptions are properly mapped to HTTP responses.
+Tests that HTTP exceptions are properly mapped to HTTP responses
+with correct error codes and messages.
+
+Note: IPK (Identity Plan Kit) exceptions are now handled by IPK itself
+via register_error_handlers=True. Those handlers are tested within IPK.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+import json
+from unittest.mock import MagicMock
 
 import pytest
+from starlette.exceptions import HTTPException
 
 from backend.core.exceptions.handlers import (
-    plan_authorization_error_handler,
-    plan_expired_handler,
-    quota_exceeded_handler,
-    token_expired_handler,
-    feature_not_available_handler,
+    domain_exception_handler,
+    http_exception_handler,
+    service_exception_handler,
+    unhandled_exception_handler,
 )
 
 
@@ -26,153 +31,272 @@ def mock_request():
     request = MagicMock()
     request.url.path = "/api/v1/test"
     request.method = "POST"
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
     return request
 
 
-class TestPlanAuthorizationErrorHandler:
-    """Tests for PlanAuthorizationError handler."""
+# =============================================================================
+# HTTP Exception Handler Tests - Status Code Handling
+# =============================================================================
 
-    async def test_returns_403_status(self, mock_request):
-        """Handler should return 403 Forbidden status."""
-        from identity_plan_kit.plans.domain.exceptions import PlanAuthorizationError
 
-        exc = PlanAuthorizationError(
-            message="Not authorized to assign plan",
-            operation="assign_plan",
-            target_user_id="user-123",
-            caller_user_id="caller-456",
+class TestHttpExceptionHandlerStatusCodes:
+    """Tests for HTTP status code handling in http_exception_handler."""
+
+    async def test_404_not_found(self, mock_request):
+        """404 should return NOT_FOUND with path context."""
+        exc = HTTPException(status_code=404, detail="Not Found")
+
+        response = await http_exception_handler(mock_request, exc)
+        body = json.loads(response.body.decode())
+
+        assert response.status_code == 404
+        assert body["error"]["code"] == "NOT_FOUND"
+        assert "/api/v1/test" in body["error"]["message"]
+        assert body["error"]["context"]["path"] == "/api/v1/test"
+        assert body["error"]["context"]["method"] == "POST"
+
+    async def test_405_method_not_allowed(self, mock_request):
+        """405 should return METHOD_NOT_ALLOWED with method and path context."""
+        exc = HTTPException(status_code=405, detail="Method Not Allowed")
+
+        response = await http_exception_handler(mock_request, exc)
+        body = json.loads(response.body.decode())
+
+        assert response.status_code == 405
+        assert body["error"]["code"] == "METHOD_NOT_ALLOWED"
+        assert "POST" in body["error"]["message"]
+        assert "/api/v1/test" in body["error"]["message"]
+
+
+class TestHttpExceptionHandlerGenericFallback:
+    """Tests for generic HTTP error fallback in http_exception_handler."""
+
+    async def test_unknown_error_uses_http_status_code(self, mock_request):
+        """Unknown errors should use HTTP_XXX code format."""
+        exc = HTTPException(status_code=418, detail="I'm a teapot")
+
+        response = await http_exception_handler(mock_request, exc)
+        body = json.loads(response.body.decode())
+
+        assert response.status_code == 418
+        assert body["error"]["code"] == "HTTP_418"
+        assert body["error"]["message"] == "I'm a teapot"
+
+    async def test_empty_detail_uses_generic_message(self, mock_request):
+        """Empty detail should use generic HTTP error message."""
+        exc = HTTPException(status_code=500, detail="")
+
+        response = await http_exception_handler(mock_request, exc)
+        body = json.loads(response.body.decode())
+
+        assert response.status_code == 500
+        assert body["error"]["code"] == "HTTP_500"
+        assert body["error"]["message"] == "HTTP error 500"
+
+    async def test_none_detail_uses_generic_message(self, mock_request):
+        """None detail should use generic HTTP error message."""
+        exc = HTTPException(status_code=503, detail=None)
+
+        response = await http_exception_handler(mock_request, exc)
+        body = json.loads(response.body.decode())
+
+        assert response.status_code == 503
+        assert body["error"]["code"] == "HTTP_503"
+        # Starlette sets default detail to status phrase, so we accept either
+        assert body["error"]["message"] in ["HTTP error 503", "Service Unavailable"]
+
+
+# =============================================================================
+# Domain Exception Handler Tests
+# =============================================================================
+
+
+class TestDomainExceptionHandler:
+    """Tests for domain exception handler."""
+
+    async def test_validation_error_returns_400(self, mock_request):
+        """DomainValidationError should return 400 Bad Request."""
+        from backend.core.domain.exceptions import DomainValidationError
+
+        exc = DomainValidationError(
+            message="Invalid email format",
+            field="email",
         )
 
-        response = await plan_authorization_error_handler(mock_request, exc)
+        response = await domain_exception_handler(mock_request, exc)
+
+        assert response.status_code == 400
+
+    async def test_entity_not_found_returns_404(self, mock_request):
+        """EntityNotFoundError should return 404 Not Found."""
+        from backend.core.domain.exceptions import EntityNotFoundError
+
+        exc = EntityNotFoundError(
+            entity_type="User",
+            entity_id="user-123",
+        )
+
+        response = await domain_exception_handler(mock_request, exc)
+
+        assert response.status_code == 404
+
+    async def test_conflict_error_returns_409(self, mock_request):
+        """DomainConflictError should return 409 Conflict."""
+        from backend.core.domain.exceptions import DomainConflictError
+
+        exc = DomainConflictError(
+            message="Email already exists",
+            entity_type="User",
+        )
+
+        response = await domain_exception_handler(mock_request, exc)
+
+        assert response.status_code == 409
+
+    async def test_authorization_error_returns_403(self, mock_request):
+        """DomainAuthorizationError should return 403 Forbidden."""
+        from backend.core.domain.exceptions import DomainAuthorizationError
+
+        exc = DomainAuthorizationError(
+            message="Not allowed to perform this action",
+            action="delete",
+        )
+
+        response = await domain_exception_handler(mock_request, exc)
 
         assert response.status_code == 403
 
-    async def test_includes_operation_in_context(self, mock_request):
-        """Handler should include operation details in error context."""
-        from identity_plan_kit.plans.domain.exceptions import PlanAuthorizationError
-        import json
+    async def test_state_error_returns_422(self, mock_request):
+        """DomainStateError should return 422 Unprocessable Entity."""
+        from backend.core.domain.exceptions import DomainStateError
 
-        exc = PlanAuthorizationError(
-            message="Not authorized to assign plan",
-            operation="assign_plan",
-            target_user_id="user-123",
-            caller_user_id=None,
+        exc = DomainStateError(
+            message="Cannot cancel completed order",
+            current_state="completed",
         )
 
-        response = await plan_authorization_error_handler(mock_request, exc)
+        response = await domain_exception_handler(mock_request, exc)
+
+        assert response.status_code == 422
+
+    async def test_includes_context_in_response(self, mock_request):
+        """Handler should include exception context in response."""
+        from backend.core.domain.exceptions import DomainValidationError
+
+        exc = DomainValidationError(
+            message="Invalid email format",
+            field="email",
+            value="invalid",
+        )
+
+        response = await domain_exception_handler(mock_request, exc)
         body = json.loads(response.body.decode())
 
-        assert body["error"]["code"] == "PLAN_AUTHORIZATION_ERROR"
-        assert body["error"]["context"]["operation"] == "assign_plan"
-        assert body["error"]["context"]["target_user_id"] == "user-123"
+        assert body["error"]["context"]["field"] == "email"
+        assert body["error"]["context"]["value"] == "invalid"
 
 
-class TestQuotaExceededHandler:
-    """Tests for QuotaExceededError handler."""
+# =============================================================================
+# Service Exception Handler Tests
+# =============================================================================
 
-    async def test_returns_429_status(self, mock_request):
-        """Handler should return 429 Too Many Requests status."""
-        from identity_plan_kit.plans.domain.exceptions import QuotaExceededError
 
-        exc = QuotaExceededError(
-            feature_code="ai_generation",
-            limit=100,
-            used=100,
-            period="monthly",
-        )
+class TestServiceExceptionHandler:
+    """Tests for ServiceException handler."""
 
-        response = await quota_exceeded_handler(mock_request, exc)
+    async def test_returns_exception_status_code(self, mock_request):
+        """Handler should return the exception's status code."""
+        from backend.core.exceptions.http_exceptions import NotFoundError
 
-        assert response.status_code == 429
+        exc = NotFoundError(message="Resource not found")
 
-    async def test_includes_quota_details(self, mock_request):
-        """Handler should include quota details in response."""
-        from identity_plan_kit.plans.domain.exceptions import QuotaExceededError
-        import json
+        response = await service_exception_handler(mock_request, exc)
 
-        exc = QuotaExceededError(
-            feature_code="ai_generation",
-            limit=100,
-            used=150,
-            period="monthly",
-        )
+        assert response.status_code == 404
 
-        response = await quota_exceeded_handler(mock_request, exc)
+    async def test_returns_exception_error_code(self, mock_request):
+        """Handler should return the exception's error code."""
+        from backend.core.exceptions.http_exceptions import AuthenticationFailedError
+
+        exc = AuthenticationFailedError(message="Invalid credentials")
+
+        response = await service_exception_handler(mock_request, exc)
         body = json.loads(response.body.decode())
 
-        assert body["error"]["code"] == "QUOTA_EXCEEDED"
-        assert body["error"]["context"]["limit"] == 100
-        assert body["error"]["context"]["used"] == 150
+        assert body["error"]["code"] == "AUTHENTICATION_FAILED"
 
 
-class TestTokenExpiredHandler:
-    """Tests for TokenExpiredError handler."""
+# =============================================================================
+# Unhandled Exception Handler Tests
+# =============================================================================
 
-    async def test_returns_401_status(self, mock_request):
-        """Handler should return 401 Unauthorized status."""
-        from identity_plan_kit.auth.domain.exceptions import TokenExpiredError
 
-        exc = TokenExpiredError()
+class TestUnhandledExceptionHandler:
+    """Tests for unhandled exception handler."""
 
-        response = await token_expired_handler(mock_request, exc)
+    async def test_returns_500_status(self, mock_request):
+        """Handler should return 500 Internal Server Error."""
+        exc = RuntimeError("Something went wrong")
 
-        assert response.status_code == 401
+        response = await unhandled_exception_handler(mock_request, exc)
 
-    async def test_error_code_is_token_expired(self, mock_request):
-        """Handler should return TOKEN_EXPIRED error code."""
-        from identity_plan_kit.auth.domain.exceptions import TokenExpiredError
-        import json
+        assert response.status_code == 500
 
-        exc = TokenExpiredError()
+    async def test_returns_internal_server_error_code(self, mock_request):
+        """Handler should return INTERNAL_SERVER_ERROR code."""
+        exc = ValueError("Unexpected error")
 
-        response = await token_expired_handler(mock_request, exc)
+        response = await unhandled_exception_handler(mock_request, exc)
         body = json.loads(response.body.decode())
 
-        assert body["error"]["code"] == "TOKEN_EXPIRED"
+        assert body["success"] is False
+        assert body["error"]["code"] == "INTERNAL_SERVER_ERROR"
+        # Should not expose internal error details
+        assert "Unexpected error" not in body["error"]["message"]
 
+    async def test_does_not_expose_internal_details(self, mock_request):
+        """Handler should not expose internal error details."""
+        exc = Exception("Database connection failed: password authentication failed")
 
-class TestFeatureNotAvailableHandler:
-    """Tests for FeatureNotAvailableError handler."""
-
-    async def test_returns_403_status(self, mock_request):
-        """Handler should return 403 Forbidden status."""
-        from identity_plan_kit.plans.domain.exceptions import FeatureNotAvailableError
-
-        exc = FeatureNotAvailableError(
-            feature_code="premium_feature",
-            plan_code="free",
-        )
-
-        response = await feature_not_available_handler(mock_request, exc)
-
-        assert response.status_code == 403
-
-    async def test_includes_feature_and_plan(self, mock_request):
-        """Handler should include feature and plan in context."""
-        from identity_plan_kit.plans.domain.exceptions import FeatureNotAvailableError
-        import json
-
-        exc = FeatureNotAvailableError(
-            feature_code="premium_feature",
-            plan_code="free",
-        )
-
-        response = await feature_not_available_handler(mock_request, exc)
+        response = await unhandled_exception_handler(mock_request, exc)
         body = json.loads(response.body.decode())
 
-        assert body["error"]["context"]["feature"] == "premium_feature"
-        assert body["error"]["context"]["plan"] == "free"
+        assert "password" not in body["error"]["message"].lower()
+        assert "database" not in body["error"]["message"].lower()
 
 
-class TestPlanExpiredHandler:
-    """Tests for PlanExpiredError handler."""
+# =============================================================================
+# Response Format Tests
+# =============================================================================
 
-    async def test_returns_402_status(self, mock_request):
-        """Handler should return 402 Payment Required status."""
-        from identity_plan_kit.plans.domain.exceptions import PlanExpiredError
 
-        exc = PlanExpiredError()
+class TestResponseFormat:
+    """Tests to ensure all handlers return consistent response format."""
 
-        response = await plan_expired_handler(mock_request, exc)
+    async def test_all_responses_have_success_false(self, mock_request):
+        """All error responses should have success: false."""
+        handlers_and_exceptions = [
+            (http_exception_handler, HTTPException(status_code=404)),
+            (unhandled_exception_handler, RuntimeError("test")),
+        ]
 
-        assert response.status_code == 402
+        for handler, exc in handlers_and_exceptions:
+            response = await handler(mock_request, exc)
+            body = json.loads(response.body.decode())
+            assert body["success"] is False, f"Handler {handler.__name__} did not return success: false"
+
+    async def test_all_responses_have_error_object(self, mock_request):
+        """All error responses should have an error object with code and message."""
+        handlers_and_exceptions = [
+            (http_exception_handler, HTTPException(status_code=400, detail="Bad request")),
+            (unhandled_exception_handler, RuntimeError("test")),
+        ]
+
+        for handler, exc in handlers_and_exceptions:
+            response = await handler(mock_request, exc)
+            body = json.loads(response.body.decode())
+            assert "error" in body, f"Handler {handler.__name__} missing error object"
+            assert "code" in body["error"], f"Handler {handler.__name__} missing error code"
+            assert "message" in body["error"], f"Handler {handler.__name__} missing error message"

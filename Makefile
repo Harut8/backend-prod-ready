@@ -10,7 +10,7 @@ APP_PORT := 8000
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-.PHONY: help env-setup install dev prod shell lint format security secrets check migrate migration clean create-admin
+.PHONY: help env-setup install dev prod shell lint format security secrets check test migrate migration clean create-admin
 
 .DEFAULT_GOAL := help
 
@@ -26,6 +26,9 @@ help:
 	@echo "  dev         Run dev server (uvicorn with reload)"
 	@echo "  prod        Run production server (docker + gunicorn)"
 	@echo "  shell       Open container shell"
+	@echo ""
+	@echo "TESTING:"
+	@echo "  test        Run all tests (pytest)"
 	@echo ""
 	@echo "CODE QUALITY:"
 	@echo "  lint        Lint code (ruff + mypy)"
@@ -71,6 +74,12 @@ prod: env-setup
 
 shell:
 	@docker exec -it $(APP_NAME) /bin/bash || echo "Container not running"
+
+# =============================================================================
+# TESTING
+# =============================================================================
+test:
+	@cd backend && PYTHONPATH=.. uv run pytest
 
 # =============================================================================
 # CODE QUALITY
@@ -144,4 +153,6 @@ clean:
 	@find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
 	@find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	@echo "Cleaning uv cache..."
+	@uv cache clean 2>/dev/null || true
 	@echo "Done"
