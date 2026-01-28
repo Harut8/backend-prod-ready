@@ -44,6 +44,8 @@ class HealthCheckService:
         """
         Check database connectivity by executing a simple query.
 
+        Also records connection pool metrics to Prometheus.
+
         Returns:
             HealthStatus with connectivity result
         """
@@ -54,6 +56,10 @@ class HealthCheckService:
             async with session:
                 await session.execute(text("SELECT 1"))
                 latency_ms = (time.perf_counter() - start) * 1000
+
+                # Record pool metrics on successful health check
+                self._session_factory.record_pool_metrics()
+
                 logger.debug("Database health check passed", latency_ms=latency_ms)
                 return HealthStatus(
                     healthy=True,

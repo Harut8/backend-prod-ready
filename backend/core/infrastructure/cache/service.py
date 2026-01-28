@@ -147,6 +147,23 @@ def _record_cache_failure(operation: str) -> None:
             _metrics_unavailable_logged = True
 
 
+def _record_cache_access(cache_type: str, *, hit: bool) -> None:
+    """Record cache hit/miss metric (lazy import to avoid circular dependency)."""
+    global _metrics_unavailable_logged  # noqa: PLW0603
+
+    try:
+        from backend.core.observability.metrics import record_cache_access  # noqa: PLC0415
+
+        record_cache_access(cache_type, hit=hit)
+    except ImportError:
+        if not _metrics_unavailable_logged:
+            logger.debug(
+                "Metrics module unavailable - cache access will not be recorded",
+                cache_type=cache_type,
+            )
+            _metrics_unavailable_logged = True
+
+
 T = TypeVar("T")
 
 # Redis circuit breaker decorator - prevents cascading failures when Redis is slow/down
@@ -389,18 +406,25 @@ class CacheService:
         _hashed_parts = self.hash_key(_combined)
         return f"{prefix}:{_hashed_parts}"
 
-    async def get(self, key: str) -> str | None:
-        """Get string value from cache."""
+    async def get(self, key: str, *, cache_type: str = "default") -> str | None:
+        """Get string value from cache.
+
+        Args:
+            key: Cache key to retrieve
+            cache_type: Type of cache for metrics (e.g., "user", "session", "config")
+        """
         await self._ensure_connected()
 
         # Use in-memory fallback if active
         if self._using_fallback and self._in_memory_cache:
             result = await self._in_memory_cache.get(key)
+            _record_cache_access(cache_type, hit=result is not None)
             logger.debug("Cache lookup (in-memory)", key=key, hit=result is not None)
             return result
 
         async def _get_operation() -> str | None:
             _result = await self._redis_client.get(key)  # type: ignore[union-attr]
+            _record_cache_access(cache_type, hit=_result is not None)
             logger.debug("Cache lookup", key=key, hit=_result is not None)
             return cast("str | None", _result)
 
@@ -411,13 +435,19 @@ class CacheService:
             default_return=None,
         )
 
-    async def get_json(self, key: str) -> dict[str, Any] | None:
-        """Get JSON value from cache with datetime deserialization."""
+    async def get_json(self, key: str, *, cache_type: str = "default") -> dict[str, Any] | None:
+        """Get JSON value from cache with datetime deserialization.
+
+        Args:
+            key: Cache key to retrieve
+            cache_type: Type of cache for metrics (e.g., "user", "session", "config")
+        """
         await self._ensure_connected()
 
         # Use in-memory fallback if active
         if self._using_fallback and self._in_memory_cache:
             _value = await self._in_memory_cache.get(key)
+            _record_cache_access(cache_type, hit=_value is not None)
             if _value is None:
                 return None
             _json_value = orjson.loads(_value)
@@ -429,6 +459,7 @@ class CacheService:
 
         async def _get_json_operation() -> dict[str, Any] | None:
             _value = await self._redis_client.get(key)  # type: ignore[union-attr]
+            _record_cache_access(cache_type, hit=_value is not None)
             if _value is None:
                 return None
 

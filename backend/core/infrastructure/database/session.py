@@ -18,3 +18,7 @@ class SessionFactory:
         if session is not None:
             return session
         return cast("AsyncSession", self._adapter.session_factory())
+
+    def record_pool_metrics(self) -> None:
+        """Record database connection pool metrics to Prometheus."""
+        self._adapter.record_pool_metrics()

@@ -28,6 +28,7 @@ from identity_plan_kit.plans.dto.usage import UsageInfo
 import structlog
 
 from backend.core.api.dtos.base import ResponseModel
+from backend.core.observability.metrics import record_api_usage
 from backend.core.security.rate_limiting import limiter
 from backend.features.ai_generation.dependencies import AiGenerationContainer
 from backend.features.ai_generation.domain import FeatureCode
@@ -110,6 +111,9 @@ async def generate_text(
         user_id=str(user.id),
     )
 
+    # Record API usage metric
+    record_api_usage(feature="ai_generation", operation="create")
+
     # Map domain object to response DTO using mapper
     response_dto = GenerationMapper.to_response_dto(result, quota_info=_usage)
 
@@ -138,6 +142,9 @@ async def get_usage(
 
     Returns current usage and quota information for the ai_generation feature.
     """
+    # Record API usage metric
+    record_api_usage(feature="ai_generation", operation="read")
+
     # Get feature usage from IPK (if available on user's plan)
     # Note: email omitted from response - use /auth/me for user profile
     usage_info = {

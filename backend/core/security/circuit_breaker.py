@@ -10,6 +10,11 @@ from purgatory.domain.model import OpenedState as CircuitBreakerOpen
 import structlog
 
 from backend.core.conf.settings import SETTINGS
+from backend.core.observability.metrics import (
+    record_circuit_breaker_failure,
+    record_circuit_breaker_state,
+    record_circuit_breaker_success,
+)
 
 
 P = ParamSpec("P")
@@ -153,6 +158,9 @@ class CircuitBreakerRegistry:
         _previous_state = self._states.get(_breaker_name, "closed")
         self._states[_breaker_name] = "open"
 
+        # Record Prometheus metric
+        record_circuit_breaker_state(_breaker_name, "open")
+
         if _previous_state != "open":
             logger.warning(
                 "Circuit breaker OPENED - too many failures",
@@ -166,6 +174,10 @@ class CircuitBreakerRegistry:
         """Log when a circuit breaker succeeds (potentially recovering from open state)."""
         _previous_state = self._states.get(_breaker_name, "closed")
 
+        # Record Prometheus metrics
+        record_circuit_breaker_success(_breaker_name)
+        record_circuit_breaker_state(_breaker_name, "closed")
+
         if _previous_state == "open":
             self._states[_breaker_name] = "closed"
             logger.info(
@@ -178,6 +190,9 @@ class CircuitBreakerRegistry:
 
     def log_circuit_failure(self, _breaker_name: str, _cb_type: CircuitBreakerType, _error: str) -> None:
         """Log when a circuit breaker records a failure."""
+        # Record Prometheus metric
+        record_circuit_breaker_failure(_breaker_name)
+
         logger.debug(
             "Circuit breaker recorded failure",
             breaker_name=_breaker_name,

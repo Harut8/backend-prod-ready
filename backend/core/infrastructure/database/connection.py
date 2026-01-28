@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import structlog
 
 from backend.core.infrastructure.database.error_handler import database_error_handler
+from backend.core.observability.metrics import update_db_pool_metrics
 from backend.core.security.timeout import timeout
 
 
@@ -222,3 +223,28 @@ class PgAsyncSQLAlchemyAdapter:
             msg = "Sync database session factory not initialized"
             raise RuntimeError(msg)
         return self._sync_session_factory
+
+    def record_pool_metrics(self) -> None:
+        """Record database connection pool metrics to Prometheus.
+
+        Extracts pool statistics from SQLAlchemy and updates the corresponding
+        Prometheus gauges. Safe to call even if engine is not initialized.
+        """
+        if not self._initialized or self._engine is None:
+            return
+
+        try:
+            pool = self._engine.pool
+            # SQLAlchemy pool stats
+            pool_size = pool.size()  # Configured pool size
+            checked_in = pool.checkedin()  # Available connections
+            checked_out = pool.checkedout()  # In-use connections
+
+            update_db_pool_metrics(
+                total=pool_size + pool.overflow(),
+                available=checked_in,
+                in_use=checked_out,
+            )
+        except Exception as e:
+            if self._logger:
+                self._logger.debug("Failed to record pool metrics", error=str(e))
