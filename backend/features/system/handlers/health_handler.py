@@ -1,10 +1,18 @@
 """
 System Health and Status Endpoints.
 
+Transport layer adapters for system health feature.
+Handles HTTP-specific concerns and delegates business logic to services.
+
 Provides endpoints for:
 - Health checks (liveness probe)
 - Readiness checks (dependency validation)
 - System status information
+
+Architecture notes:
+- DTOs are used for request/response serialization
+- Mappers convert between domain objects and DTOs
+- Services return domain objects
 """
 
 from typing import Annotated
@@ -14,40 +22,21 @@ from fastapi import APIRouter, Depends, Request, Response
 import structlog
 
 from backend.core.api.dtos.base import ResponseModel
-from backend.core.conf.settings import SETTINGS
 from backend.core.security.rate_limiting import limiter
 from backend.features.system.dependencies import SystemContainer
-from backend.features.system.dtos import (
-    ComponentHealthDto,
+from backend.features.system.dto import (
     SystemHealthResponseDto,
     SystemStatusResponseDto,
 )
-from backend.features.system.services import HealthCheckService, SystemHealth
+from backend.features.system.mappers import HealthMapper
+from backend.features.system.services import HealthCheckService
 
 
 logger = structlog.get_logger(__name__)
-system_router = APIRouter(prefix="/system")
+router = APIRouter(prefix="/system")
 
 
-def _to_health_response_dto(system_health: SystemHealth) -> SystemHealthResponseDto:
-    """Convert SystemHealth domain object to response DTO."""
-    return SystemHealthResponseDto(
-        status=system_health.status,
-        service=SETTINGS.APP.APP_NAME,
-        database=ComponentHealthDto(
-            healthy=system_health.database.healthy,
-            message=system_health.database.message,
-            latency_ms=system_health.database.latency_ms,
-        ),
-        cache=ComponentHealthDto(
-            healthy=system_health.cache.healthy,
-            message=system_health.cache.message,
-            latency_ms=system_health.cache.latency_ms,
-        ),
-    )
-
-
-@system_router.get("/health", operation_id="system_health_check")
+@router.get("/health", operation_id="system_health_check")
 @limiter.limit("60/minute")
 async def health(request: Request) -> ResponseModel[SystemStatusResponseDto]:  # noqa: ARG001
     """
@@ -59,10 +48,10 @@ async def health(request: Request) -> ResponseModel[SystemStatusResponseDto]:  #
     This endpoint does NOT check dependencies - it only confirms
     the service process is alive and responding.
     """
-    return ResponseModel.ok(data=SystemStatusResponseDto(status="ok", service=SETTINGS.APP.APP_NAME))
+    return ResponseModel.ok(data=HealthMapper.to_status_response_dto())
 
 
-@system_router.get("/ready", operation_id="system_ready_check")
+@router.get("/ready", operation_id="system_ready_check")
 @limiter.limit("60/minute")
 @inject
 async def ready(
@@ -87,7 +76,7 @@ async def ready(
         - 503 Service Unavailable: Critical dependencies are unhealthy
     """
     system_health = await health_check_service.get_system_health()
-    response_dto = _to_health_response_dto(system_health)
+    response_dto = HealthMapper.to_health_response_dto(system_health)
 
     if not system_health.is_ready:
         response.status_code = 503
@@ -99,7 +88,7 @@ async def ready(
     return ResponseModel.ok(data=response_dto)
 
 
-@system_router.get("/status", operation_id="system_detailed_status")
+@router.get("/status", operation_id="system_detailed_status")
 @limiter.limit("30/minute")
 @inject
 async def status(
@@ -116,4 +105,4 @@ async def status(
     Use this for monitoring dashboards and debugging.
     """
     system_health = await health_check_service.get_system_health()
-    return ResponseModel.ok(data=_to_health_response_dto(system_health))
+    return ResponseModel.ok(data=HealthMapper.to_health_response_dto(system_health))

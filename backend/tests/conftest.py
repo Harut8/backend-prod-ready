@@ -4,6 +4,7 @@ Pytest configuration and shared fixtures.
 Provides fixtures for:
 - Database sessions with automatic transaction rollback
 - Mock Redis using fakeredis
+- Testcontainers for PostgreSQL and Redis integration tests
 - Common test utilities
 """
 
@@ -12,9 +13,126 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.core.infrastructure.cache.service import CacheService
+
+
+# =============================================================================
+# Testcontainers Fixtures (Real PostgreSQL and Redis)
+# =============================================================================
+
+
+@pytest.fixture(scope="session")
+def postgres_container():
+    """
+    Create a PostgreSQL container for integration tests.
+
+    Scope is session-level to avoid creating/destroying containers for each test.
+    Use with @pytest.mark.integration marker.
+    """
+    try:
+        from testcontainers.postgres import PostgresContainer
+    except ImportError:
+        pytest.skip("testcontainers not installed")
+
+    with PostgresContainer("postgres:16-alpine") as postgres:
+        yield postgres
+
+
+@pytest.fixture(scope="session")
+def redis_container():
+    """
+    Create a Redis container for integration tests.
+
+    Scope is session-level to avoid creating/destroying containers for each test.
+    Use with @pytest.mark.integration marker.
+    """
+    try:
+        from testcontainers.redis import RedisContainer
+    except ImportError:
+        pytest.skip("testcontainers not installed")
+
+    with RedisContainer("redis:7-alpine") as redis_cont:
+        yield redis_cont
+
+
+@pytest.fixture
+async def postgres_session(postgres_container) -> AsyncGenerator[AsyncSession, None]:
+    """
+    Create an async session connected to the testcontainers PostgreSQL.
+
+    Each test gets a fresh transaction that is rolled back after the test.
+    """
+    # Build async connection URL
+    sync_url = postgres_container.get_connection_url()
+    async_url = sync_url.replace("postgresql://", "postgresql+asyncpg://")
+
+    engine = create_async_engine(
+        async_url,
+        echo=False,
+        pool_pre_ping=True,
+    )
+
+    async_session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            yield session
+            await session.rollback()
+
+    await engine.dispose()
+
+
+@pytest.fixture
+async def redis_client(redis_container) -> AsyncGenerator[aioredis.Redis, None]:
+    """
+    Create an async Redis client connected to the testcontainers Redis.
+    """
+    host = redis_container.get_container_host_ip()
+    port = redis_container.get_exposed_port(6379)
+
+    client = aioredis.Redis(
+        host=host,
+        port=int(port),
+        decode_responses=True,
+    )
+
+    yield client
+
+    await client.flushdb()  # Clean up after test
+    await client.close()
+
+
+@pytest.fixture
+async def redis_cache_service(redis_container) -> AsyncGenerator[CacheService, None]:
+    """
+    Create a CacheService connected to the testcontainers Redis.
+
+    This provides real Redis behavior for integration tests.
+    """
+    host = redis_container.get_container_host_ip()
+    port = redis_container.get_exposed_port(6379)
+
+    service = CacheService()
+    service._redis_client = aioredis.Redis(
+        host=host,
+        port=int(port),
+        decode_responses=True,
+    )
+    service._initialized = True
+    service._using_fallback = False
+
+    yield service
+
+    if service._redis_client:
+        await service._redis_client.flushdb()
+        await service._redis_client.close()
 
 
 # =============================================================================

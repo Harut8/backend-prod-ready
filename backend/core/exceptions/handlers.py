@@ -21,6 +21,7 @@ from identity_plan_kit.auth.domain.exceptions import (
 )
 from identity_plan_kit.plans.domain.exceptions import (
     FeatureNotAvailableError,
+    PlanAuthorizationError,
     PlanExpiredError,
     PlanNotFoundError,
     QuotaExceededError,
@@ -46,6 +47,7 @@ IPK_EXCEPTION_HANDLERS = {
     "RoleNotFoundError": RoleNotFoundError,
     "QuotaExceededError": QuotaExceededError,
     "PlanExpiredError": PlanExpiredError,
+    "PlanAuthorizationError": PlanAuthorizationError,
     "FeatureNotAvailableError": FeatureNotAvailableError,
     "UserPlanNotFoundError": UserPlanNotFoundError,
     "PlanNotFoundError": PlanNotFoundError,
@@ -461,16 +463,20 @@ async def quota_exceeded_handler(request: Request, exc: QuotaExceededError) -> J
 
 
 async def plan_expired_handler(request: Request, exc: PlanExpiredError) -> JSONResponse:
-    """Handle plan expired errors from IPK."""
+    """Handle plan expired errors from IPK.
+
+    Returns 402 Payment Required - the appropriate status code for expired
+    subscriptions/plans where payment is needed to restore access.
+    """
     logger.info(
         "Plan expired",
         path=request.url.path,
         method=request.method,
     )
     return _build_error_response(
-        status_code=403,
+        status_code=402,
         code=exc.code,
-        message="Your subscription plan has expired.",
+        message="Your subscription plan has expired. Please renew to continue.",
     )
 
 
@@ -522,6 +528,30 @@ async def plan_not_found_handler(request: Request, exc: PlanNotFoundError) -> JS
     )
 
 
+async def plan_authorization_error_handler(request: Request, exc: PlanAuthorizationError) -> JSONResponse:
+    """Handle plan authorization errors from IPK.
+
+    Raised when a plan operation is not authorized (e.g., unauthorized plan assignment).
+    """
+    logger.warning(
+        "Plan authorization error",
+        path=request.url.path,
+        method=request.method,
+        operation=exc.operation,
+        target_user_id=exc.target_user_id,
+        caller_user_id=exc.caller_user_id,
+    )
+    return _build_error_response(
+        status_code=403,
+        code=exc.code,
+        message=exc.message,
+        context={
+            "operation": exc.operation,
+            "target_user_id": exc.target_user_id,
+        },
+    )
+
+
 async def ipk_base_error_handler(request: Request, exc: IPKBaseError) -> JSONResponse:
     """Handle base IPK errors (catch-all for IPK domain errors)."""
     logger.warning(
@@ -555,6 +585,7 @@ __all__ = [
     "ipk_user_not_found_handler",
     "not_found_exception",
     "permission_denied_handler",
+    "plan_authorization_error_handler",
     "plan_expired_handler",
     "plan_not_found_handler",
     "quota_exceeded_handler",

@@ -71,6 +71,23 @@ class AppSettings(CustomSettings):
         ],
         alias="CORS_ORIGINS",
     )
+    CORS_ALLOW_METHODS: list[str] = Field(
+        default=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        alias="CORS_ALLOW_METHODS",
+        description="Allowed HTTP methods for CORS",
+    )
+    CORS_ALLOW_HEADERS: list[str] = Field(
+        default=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+            "X-Request-ID",
+        ],
+        alias="CORS_ALLOW_HEADERS",
+        description="Allowed HTTP headers for CORS",
+    )
     # Admission control: max concurrent requests before load shedding
     MAX_CONCURRENT_REQUESTS: int = Field(default=100, alias="MAX_CONCURRENT_REQUESTS")
 
@@ -225,8 +242,9 @@ class RateLimitSettings(CustomSettings):
     # These are the IP ranges of your reverse proxies (nginx, AWS ALB, Cloudflare, etc.)
     # Only requests from these IPs will have their X-Forwarded-For headers trusted
     #
-    # SECURITY WARNING: The default ranges include broad private networks for development.
-    # For production deployments, you SHOULD narrow these to your specific infrastructure:
+    # SECURITY CRITICAL: Default ranges are MINIMAL (localhost + Docker only).
+    # Production deployments MUST configure explicit CIDRs for their infrastructure.
+    # A validator will REJECT production startup if only default CIDRs are configured.
     #
     # Example configurations by deployment type:
     #
@@ -244,40 +262,21 @@ class RateLimitSettings(CustomSettings):
     #
     TRUSTED_PROXY_CIDRS: list[str] = Field(
         default=[
-            # Localhost (for development)
+            # Localhost only (for development)
             "127.0.0.0/8",
             "::1/128",
-            # Docker default bridge network
+            # Docker default bridge network (for local development)
             "172.17.0.0/16",
-            # Docker compose networks
+            # Docker compose networks (for local development)
             "172.18.0.0/16",
             "172.19.0.0/16",
-            # Private networks (commonly used for internal load balancers)
-            # WARNING: These are broad defaults - narrow for production!
-            "10.0.0.0/8",
-            "192.168.0.0/16",
-            # AWS ALB health check IPs (VPC internal)
-            # Add your specific ALB subnet CIDRs in production
-            # Cloudflare IPs (uncomment if using Cloudflare)
-            # See: https://www.cloudflare.com/ips/
-            # "173.245.48.0/20",
-            # "103.21.244.0/22",
-            # "103.22.200.0/22",
-            # "103.31.4.0/22",
-            # "141.101.64.0/18",
-            # "108.162.192.0/18",
-            # "190.93.240.0/20",
-            # "188.114.96.0/20",
-            # "197.234.240.0/22",
-            # "198.41.128.0/17",
-            # "162.158.0.0/15",
-            # "104.16.0.0/13",
-            # "104.24.0.0/14",
-            # "172.64.0.0/13",
-            # "131.0.72.0/22",
+            # NOTE: Broad private ranges (10.0.0.0/8, 192.168.0.0/16) are intentionally
+            # NOT included by default. Any attacker on the same private network could
+            # spoof X-Forwarded-For headers to bypass rate limiting.
+            # Configure your specific infrastructure CIDRs explicitly.
         ],
         alias="TRUSTED_PROXY_CIDRS",
-        description="CIDR ranges of trusted reverse proxies for X-Forwarded-For validation. Narrow for production!",
+        description="CIDR ranges of trusted reverse proxies for X-Forwarded-For validation. MUST be explicitly configured for production!",
     )
 
 
@@ -296,11 +295,13 @@ class AdminSettings(CustomSettings):
         description="Admin password - must be explicitly set (no default for security)",
     )
 
-    # IP-based access control
+    # IP-based access control (supports exact IPs and CIDR ranges)
     ADMIN_ALLOWED_IPS: list[str] = Field(
         default=["127.0.0.1", "::1", "192.168.65.1", "172.17.0.1", "10.0.0.1"],
         alias="ADMIN_ALLOWED_IPS",
-        description="IP addresses allowed to access admin panel (empty = allow all)",
+        description="IP addresses or CIDR ranges allowed to access admin panel. "
+        "Supports exact IPs (192.168.1.100) and CIDR notation (10.0.0.0/8). "
+        "Empty list = allow all (not recommended for production).",
     )
 
     # Session settings
@@ -511,9 +512,16 @@ class TimeoutSettings(CustomSettings):
 
     # Asyncpg cleanup delay (for handling timeout scenarios)
     ASYNCPG_CLEANUP_DELAY: float = Field(
-        default=0.1,
+        default=0.5,  # Increased from 0.1 for better cleanup under heavy load
         alias="ASYNCPG_CLEANUP_DELAY",
         description="Delay before cleaning up after asyncpg timeout in seconds",
+    )
+
+    # Global request timeout (prevents runaway requests)
+    REQUEST_TIMEOUT: float = Field(
+        default=30.0,
+        alias="REQUEST_TIMEOUT",
+        description="Maximum time for a request to complete before being terminated in seconds",
     )
 
 
@@ -621,6 +629,60 @@ class Settings(BaseModel):
         if not self.APP.CORS_ORIGINS and self.APP.ENVIRONMENT == "prod":
             _msg = "CORS_ORIGINS not set - using default origins"
             raise ValueError(_msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_trusted_proxy_cidrs(self) -> "Settings":
+        """Enforce explicit trusted proxy CIDR configuration in production.
+
+        SECURITY: Default CIDRs only include localhost and Docker networks.
+        Production environments must configure their specific infrastructure
+        CIDRs (AWS ALB, Cloudflare, etc.) to prevent X-Forwarded-For spoofing.
+        """
+        if self.APP.ENVIRONMENT != "prod":
+            return self
+
+        # These are the default development-only CIDRs
+        _dev_only_defaults = {
+            "127.0.0.0/8",
+            "::1/128",
+            "172.17.0.0/16",
+            "172.18.0.0/16",
+            "172.19.0.0/16",
+        }
+
+        # Overly broad CIDRs that are dangerous in production
+        # These allow any attacker on the network to spoof X-Forwarded-For
+        _overly_broad_cidrs = {
+            "10.0.0.0/8",      # Entire 10.x.x.x range - too broad
+            "192.168.0.0/16",  # Entire 192.168.x.x range - too broad
+            "172.16.0.0/12",   # Entire 172.16-31.x.x range - too broad
+        }
+
+        _configured_cidrs = set(self.RATE_LIMIT.TRUSTED_PROXY_CIDRS)
+
+        # Check if only default CIDRs are configured (or a subset)
+        if _configured_cidrs.issubset(_dev_only_defaults):
+            _msg = (
+                "TRUSTED_PROXY_CIDRS must be explicitly configured for production. "
+                "Default CIDRs only include localhost and Docker networks. "
+                "Configure your specific infrastructure CIDRs (AWS ALB, Cloudflare, etc.) "
+                "to prevent X-Forwarded-For header spoofing attacks. "
+                "Example: TRUSTED_PROXY_CIDRS=[\"10.0.0.0/16\"] for AWS VPC."
+            )
+            raise ValueError(_msg)
+
+        # Check for overly broad CIDRs
+        _found_broad = _configured_cidrs.intersection(_overly_broad_cidrs)
+        if _found_broad:
+            _msg = (
+                f"Overly broad CIDRs not allowed in production: {_found_broad}. "
+                "These ranges allow any host on the network to spoof X-Forwarded-For headers. "
+                "Use specific subnet CIDRs instead (e.g., '10.0.1.0/24' for ALB subnet, "
+                "not '10.0.0.0/8' for entire private network)."
+            )
+            raise ValueError(_msg)
+
         return self
 
 

@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "Backend",
+			"path": "backend"
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "${workspaceFolder:Backend}/.venv/bin/python",
+		"python.analysis.extraPaths": [
+			"${workspaceFolder:Backend}"
+		]
+	}
+}

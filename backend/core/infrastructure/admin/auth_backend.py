@@ -2,7 +2,7 @@
 Admin Panel Authentication Backend.
 
 Extends identity-plan-kit's AdminAuthBackend with additional security features:
-- IP allowlist enforcement
+- IP allowlist enforcement (supports both exact IPs and CIDR ranges)
 - Optional MFA (TOTP) support
 
 Two-tier admin system (from IKP):
@@ -12,6 +12,8 @@ Two-tier admin system (from IKP):
 
 from __future__ import annotations
 
+from functools import lru_cache
+import ipaddress
 from typing import TYPE_CHECKING
 
 from identity_plan_kit.admin import AdminAuthBackend as IPKAdminAuthBackend
@@ -20,6 +22,7 @@ from starlette.responses import RedirectResponse
 import structlog
 
 from backend.core.conf.settings import SETTINGS
+from backend.core.security.proxy_validation import extract_client_ip_secure
 
 
 if TYPE_CHECKING:
@@ -27,6 +30,50 @@ if TYPE_CHECKING:
 
 
 logger = structlog.get_logger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _parse_admin_allowed_ips(
+    allowed_ips: tuple[str, ...],
+) -> tuple[
+    set[str],  # Exact IPs
+    tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...],  # CIDR networks
+]:
+    """
+    Parse admin allowed IPs into exact matches and CIDR networks.
+
+    Args:
+        allowed_ips: Tuple of IP addresses or CIDR ranges (tuple for hashability)
+
+    Returns:
+        Tuple of (exact_ips set, cidr_networks tuple)
+    """
+    exact_ips: set[str] = set()
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+
+    for entry in allowed_ips:
+        entry = entry.strip()
+        if not entry:
+            continue
+
+        # Check if it's a CIDR notation
+        if "/" in entry:
+            try:
+                network = ipaddress.ip_network(entry, strict=False)
+                networks.append(network)
+                logger.debug("Parsed admin CIDR allowlist entry", cidr=entry)
+            except ValueError as e:
+                logger.warning("Invalid CIDR in ADMIN_ALLOWED_IPS", entry=entry, error=str(e))
+        else:
+            # Exact IP match
+            try:
+                # Validate it's a valid IP
+                ipaddress.ip_address(entry)
+                exact_ips.add(entry)
+            except ValueError as e:
+                logger.warning("Invalid IP in ADMIN_ALLOWED_IPS", entry=entry, error=str(e))
+
+    return exact_ips, tuple(networks)
 
 
 class AdminAuthBackend(IPKAdminAuthBackend):
@@ -184,20 +231,24 @@ class AdminAuthBackend(IPKAdminAuthBackend):
         return await super().authenticate(request)
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP from request, considering proxies."""
-        # Check X-Forwarded-For header (when behind reverse proxy)
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            # Take the first IP (original client)
-            return forwarded_for.split(",")[0].strip()
+        """Extract client IP from request securely.
 
-        # Fall back to direct client IP
-        if request.client:
-            return request.client.host
-        return "unknown"
+        SECURITY: Only trusts X-Forwarded-For headers from configured trusted proxies.
+        This prevents IP spoofing attacks to bypass admin IP allowlist.
+        """
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        direct_ip = request.client.host if request.client else None
+        return extract_client_ip_secure(x_forwarded_for, direct_ip)
 
     def _check_ip_allowed(self, request: Request) -> bool:
-        """Check if client IP is in allowed list."""
+        """Check if client IP is in allowed list (supports exact IPs and CIDR ranges).
+
+        The allowed list can contain:
+        - Exact IP addresses: "192.168.1.100"
+        - CIDR ranges: "10.0.0.0/8", "192.168.0.0/16"
+
+        Both IPv4 and IPv6 are supported.
+        """
         allowed_ips = SETTINGS.ADMIN.ADMIN_ALLOWED_IPS
 
         # If no IP restrictions configured, allow all
@@ -206,5 +257,23 @@ class AdminAuthBackend(IPKAdminAuthBackend):
 
         client_ip = self._get_client_ip(request)
 
-        # Check if IP is in allowed list
-        return client_ip in allowed_ips
+        # Parse allowed IPs into exact matches and CIDR networks
+        # Uses cached parsing to avoid re-parsing on every request
+        exact_ips, cidr_networks = _parse_admin_allowed_ips(tuple(allowed_ips))
+
+        # Check exact IP match first (fast path)
+        if client_ip in exact_ips:
+            return True
+
+        # Check CIDR networks
+        try:
+            client_addr = ipaddress.ip_address(client_ip)
+            for network in cidr_networks:
+                if client_addr in network:
+                    return True
+        except ValueError:
+            # Invalid client IP format - deny access
+            logger.warning("Invalid client IP format during admin access check", client_ip=client_ip)
+            return False
+
+        return False

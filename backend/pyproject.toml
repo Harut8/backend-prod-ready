@@ -75,6 +75,8 @@ dev = [
   "py-spy>=0.3.14",  # External process profiler for production debugging
   "fakeredis>=2.21.0",  # Mock Redis for testing
   "safety>=3.2.0",
+  "testcontainers[postgres,redis]>=4.0.0",  # Docker containers for integration tests
+  "aiosqlite>=0.20.0",  # Async SQLite for lightweight tests
 ]
 load-test = [
   "locust>=2.20.0",     # Modern load testing framework with web UI
@@ -293,5 +295,3 @@ dev-dependencies = [
     "pre-commit>=4.3.0",
 ]
 
-[tool.uv.sources]
-identity-plan-kit = { path = "../../identity-plan-kit", editable = true }

@@ -25,6 +25,15 @@ class BaseUnitOfWork(ABC):
 
     Ensures operations execute within a single transaction with ACID properties.
     Supports both independent and orchestrated (shared session) transactions.
+
+    IMPORTANT - Shared Session Usage:
+        When using shared sessions (via configure_for_shared_session), be aware that
+        SQLAlchemy AsyncSession is NOT safe for concurrent access from multiple coroutines.
+        If you need to use multiple UoWs with a shared session concurrently, you MUST:
+        1. Pass a shared lock via configure_for_shared_session(session, shared_lock=lock)
+        2. Use the lock to coordinate access to the session
+
+        For truly concurrent operations, prefer creating separate UoWs with their own sessions.
     """
 
     def __init__(
@@ -41,6 +50,8 @@ class BaseUnitOfWork(ABC):
         self._auto_commit = auto_commit
         self._owns_session = session is None
         self._timeout_occurred = False
+        # Lock for coordinating shared session access across concurrent UoWs
+        self._shared_session_lock: asyncio.Lock | None = None
 
     @property
     def owns_session(self) -> bool:
@@ -65,12 +76,55 @@ class BaseUnitOfWork(ABC):
     def session(self, session: AsyncSession) -> None:
         self._session = session
 
-    def configure_for_shared_session(self, session: AsyncSession) -> Self:
-        """Configure UOW to use a shared session for orchestrated transactions."""
+    def configure_for_shared_session(
+        self,
+        session: AsyncSession,
+        shared_lock: asyncio.Lock | None = None,
+    ) -> Self:
+        """Configure UOW to use a shared session for orchestrated transactions.
+
+        Args:
+            session: The shared AsyncSession to use
+            shared_lock: Optional lock for coordinating concurrent access.
+                        If multiple UoWs will access the shared session concurrently,
+                        pass the same lock to all of them for safe coordination.
+
+        WARNING: AsyncSession is NOT thread-safe or coroutine-safe for concurrent access.
+        If you need to run multiple UoWs concurrently with a shared session, you MUST
+        provide a shared_lock. Without it, concurrent operations may corrupt the session
+        state, leading to data inconsistencies or errors.
+
+        For truly parallel operations, consider using separate sessions instead.
+
+        Example:
+            # Safe sequential usage (no lock needed):
+            async with uow1.configure_for_shared_session(session):
+                await uow1.repo.get(...)
+            async with uow2.configure_for_shared_session(session):
+                await uow2.repo.get(...)
+
+            # Concurrent usage (lock required):
+            shared_lock = asyncio.Lock()
+            async with uow1.configure_for_shared_session(session, shared_lock):
+                async with shared_lock:
+                    await uow1.repo.get(...)
+        """
         self._session = session
         self._auto_commit = False
         self._owns_session = False
+        self._shared_session_lock = shared_lock
+
+        if shared_lock is None:
+            self._logger.debug(
+                "Shared session configured without lock - ensure sequential access only",
+            )
+
         return self
+
+    @property
+    def shared_session_lock(self) -> asyncio.Lock | None:
+        """Get the shared session lock for coordinating concurrent access."""
+        return self._shared_session_lock
 
     @abstractmethod
     def _register_repositories(self) -> None:
@@ -83,7 +137,7 @@ class BaseUnitOfWork(ABC):
         msg = "Session factory not provided"
         raise RuntimeError(msg)
 
-    @timeout_uow_aware(7.0)
+    @timeout_uow_aware(SETTINGS.TIMEOUTS.UOW_CONTEXT_TIMEOUT)
     @database_error_handler
     async def __aenter__(self) -> Self:
         """Enter async context and initialize session."""
@@ -200,7 +254,7 @@ class BaseUnitOfWork(ABC):
 
         self._repositories.clear()
 
-    @timeout_uow_aware(10.0)
+    @timeout_uow_aware(SETTINGS.TIMEOUTS.TRANSACTION_TIMEOUT)
     @database_error_handler
     async def commit(self) -> None:
         """Commit the current transaction."""
@@ -239,7 +293,7 @@ class BaseUnitOfWork(ABC):
         except Exception as e:
             self._logger.exception("Rollback failed", error=str(e))
 
-    @timeout_uow_aware(10.0)
+    @timeout_uow_aware(SETTINGS.TIMEOUTS.TRANSACTION_TIMEOUT)
     @database_error_handler
     async def flush(self) -> None:
         """Flush changes to database without committing."""

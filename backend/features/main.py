@@ -50,6 +50,7 @@ import tenacity  # noqa: E402
 # =============================================================================
 from backend.core.api.middleware.admission_control import AdmissionControlMiddleware  # noqa: E402
 from backend.core.api.middleware.request_id import RequestIdMiddleware  # noqa: E402
+from backend.core.api.middleware.request_timeout import RequestTimeoutMiddleware  # noqa: E402
 from backend.core.conf.settings import SETTINGS  # noqa: E402
 from backend.core.domain.exceptions import DomainError  # noqa: E402
 from backend.core.exceptions import KinoneeErrorFormatter  # noqa: E402
@@ -63,6 +64,7 @@ from backend.core.exceptions.handlers import (  # noqa: E402
     ipk_base_error_handler,
     ipk_user_not_found_handler,
     permission_denied_handler,
+    plan_authorization_error_handler,
     plan_expired_handler,
     plan_not_found_handler,
     quota_exceeded_handler,
@@ -84,7 +86,8 @@ from backend.core.observability.tracing import setup_tracing  # noqa: E402
 from backend.core.security.rate_limiting import limiter, rate_limit_exceeded_handler  # noqa: E402
 from backend.features.ai_generation import AiGenerationContainer, ai_generation_router  # noqa: E402
 from backend.features.ai_generation.handlers import generation_handler as ai_generation_handler_module  # noqa: E402
-from backend.features.system import SystemContainer, router as system_router_module, system_router  # noqa: E402
+from backend.features.system import SystemContainer, system_router
+from backend.features.system.handlers import health_handler as system_handler_module  # noqa: E402
 
 
 logger = structlog.get_logger(__name__)
@@ -174,7 +177,7 @@ async def _initialize_database(app: Application) -> None:
 async def _initialize_cache(app: Application) -> None:
     """Initialize Redis cache connection during startup."""
     cache_service = app.infrastructure_container.cache_service()
-    await cache_service._ensure_connected()
+    await cache_service.connect()
 
 
 # =============================================================================
@@ -263,7 +266,7 @@ def _init_system_container(app: Application) -> None:
     )
 
     app.system_container.wire(
-        modules=[system_router_module],
+        modules=[system_handler_module],
     )
 
     logger.debug("System container initialized")
@@ -310,18 +313,28 @@ def _configure_middleware(app: Application) -> None:
 
     Order matters! Middleware is processed outside-in on request,
     inside-out on response. CORS must be outermost for preflight requests.
+
+    Stack order (first added = outermost):
+    1. CORS - Handle preflight requests before anything else
+    2. Request ID - Add correlation ID for tracing
+    3. Request Timeout - Enforce global request timeout (safety net)
+    4. Admission Control - Prevent overload
     """
     # CORS - must be first (outermost) for preflight handling
     app.add_middleware(
         CORSMiddleware,
         allow_origins=SETTINGS.APP.CORS_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=SETTINGS.APP.CORS_ALLOW_METHODS,
+        allow_headers=SETTINGS.APP.CORS_ALLOW_HEADERS,
     )
 
     # Request ID middleware for tracing and correlation
     app.add_middleware(RequestIdMiddleware)
+
+    # Request timeout - global safety net for runaway requests
+    # Individual operations should still have their own timeouts
+    app.add_middleware(RequestTimeoutMiddleware)
 
     # Admission control - prevents connection pool exhaustion under burst traffic
     # Must be after request ID so rejected requests still have correlation IDs
@@ -371,6 +384,7 @@ def _configure_exception_handlers(app: Application) -> None:
     app.add_exception_handler(IPK_EXCEPTION_HANDLERS["FeatureNotAvailableError"], feature_not_available_handler)
     app.add_exception_handler(IPK_EXCEPTION_HANDLERS["UserPlanNotFoundError"], user_plan_not_found_handler)
     app.add_exception_handler(IPK_EXCEPTION_HANDLERS["PlanNotFoundError"], plan_not_found_handler)
+    app.add_exception_handler(IPK_EXCEPTION_HANDLERS["PlanAuthorizationError"], plan_authorization_error_handler)
     app.add_exception_handler(IPK_EXCEPTION_HANDLERS["IPKBaseError"], ipk_base_error_handler)
 
     # Catch-all for unhandled exceptions (must be last)

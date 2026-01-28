@@ -20,6 +20,14 @@ from backend.core.security.circuit_breaker import (
 logger = structlog.get_logger(__name__)
 
 
+# Connection retry configuration
+# Prevents retry storms when Redis is persistently unavailable
+INITIAL_RETRY_DELAY = 1.0  # Start with 1 second
+MAX_RETRY_DELAY = 60.0  # Cap at 1 minute
+RETRY_BACKOFF_FACTOR = 2.0  # Double each retry
+RETRY_COOLDOWN_PERIOD = 30.0  # Seconds before resetting retry state on success
+
+
 # =============================================================================
 # In-Memory Cache (Fallback for local/dev)
 # =============================================================================
@@ -165,13 +173,71 @@ class CacheService:
         self._using_fallback = False
         self._deletion_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_DELETIONS)
 
+        # Connection retry state (prevents retry storms)
+        self._last_connection_attempt: float = 0.0
+        self._connection_retry_delay: float = INITIAL_RETRY_DELAY
+        self._consecutive_failures: int = 0
+
     def _should_use_fallback(self) -> bool:
         """Check if in-memory fallback should be used."""
         return SETTINGS.APP.ENVIRONMENT in self._FALLBACK_ENVIRONMENTS
 
+    def _should_attempt_connection(self) -> bool:
+        """Check if we should attempt a connection based on backoff state.
+
+        Implements exponential backoff to prevent retry storms when Redis
+        is persistently unavailable. Each failed attempt increases the delay.
+        """
+        if self._consecutive_failures == 0:
+            return True
+
+        time_since_last = time.time() - self._last_connection_attempt
+        return time_since_last >= self._connection_retry_delay
+
+    def _record_connection_success(self) -> None:
+        """Reset backoff state after successful connection."""
+        self._consecutive_failures = 0
+        self._connection_retry_delay = INITIAL_RETRY_DELAY
+        self._last_connection_attempt = time.time()
+
+    def _record_connection_failure(self) -> None:
+        """Update backoff state after failed connection attempt."""
+        self._consecutive_failures += 1
+        self._last_connection_attempt = time.time()
+
+        # Exponential backoff with cap
+        self._connection_retry_delay = min(
+            self._connection_retry_delay * RETRY_BACKOFF_FACTOR,
+            MAX_RETRY_DELAY,
+        )
+
+        logger.debug(
+            "Connection attempt failed, backing off",
+            consecutive_failures=self._consecutive_failures,
+            next_retry_delay=self._connection_retry_delay,
+        )
+
     async def _ensure_connected(self) -> None:
-        """Ensure Redis connection is established."""
+        """Ensure Redis connection is established with exponential backoff.
+
+        Uses exponential backoff to prevent retry storms when Redis is
+        persistently unavailable. If we've recently failed to connect,
+        we skip the retry attempt to reduce load on Redis and the network.
+        """
         if self._initialized:
+            return
+
+        # Check if we should attempt connection based on backoff
+        if not self._should_attempt_connection():
+            logger.debug(
+                "Skipping connection attempt (in backoff period)",
+                retry_delay=self._connection_retry_delay,
+                consecutive_failures=self._consecutive_failures,
+            )
+            # Use fallback if available and in dev/local
+            if self._should_use_fallback() and self._in_memory_cache is None:
+                self._in_memory_cache = InMemoryCache()
+                self._using_fallback = True
             return
 
         try:
@@ -187,8 +253,11 @@ class CacheService:
                 await self._redis_client.ping()
             logger.info("Redis cache service connected")
             self._initialized = True
+            self._record_connection_success()
         except (redis.ConnectionError, redis.TimeoutError) as e:
             self._redis_client = None
+            self._record_connection_failure()
+
             if self._should_use_fallback():
                 self._in_memory_cache = InMemoryCache()
                 self._using_fallback = True
@@ -196,16 +265,20 @@ class CacheService:
                     "Redis unavailable, using in-memory cache fallback",
                     error=str(e),
                     environment=SETTINGS.APP.ENVIRONMENT,
+                    retry_delay=self._connection_retry_delay,
                 )
             else:
                 logger.warning(
                     "Redis connection failed, caching disabled",
                     error=str(e),
                     environment=SETTINGS.APP.ENVIRONMENT,
+                    retry_delay=self._connection_retry_delay,
                 )
             self._initialized = True
         except (ValueError, TypeError) as e:
             self._redis_client = None
+            self._record_connection_failure()
+
             if self._should_use_fallback():
                 self._in_memory_cache = InMemoryCache()
                 self._using_fallback = True
@@ -221,6 +294,15 @@ class CacheService:
                     environment=SETTINGS.APP.ENVIRONMENT,
                 )
             self._initialized = True
+
+    async def connect(self) -> None:
+        """
+        Initialize and connect to the cache backend.
+
+        This is the public interface for establishing the cache connection.
+        Should be called during application startup.
+        """
+        await self._ensure_connected()
 
     async def __aenter__(self) -> "CacheService":
         await self._ensure_connected()
@@ -567,6 +649,55 @@ class CacheService:
             return False
         else:
             return True
+
+    async def execute_lua_script(
+        self,
+        script: str,
+        keys: list[str],
+        args: list[str | int],
+    ) -> list[Any] | None:
+        """
+        Execute a Lua script atomically on Redis.
+
+        This is critical for operations that need to be atomic, such as
+        idempotency checks where we need to check-and-set in one operation.
+
+        Args:
+            script: The Lua script to execute
+            keys: List of Redis keys (accessible via KEYS[1], KEYS[2], etc.)
+            args: List of arguments (accessible via ARGV[1], ARGV[2], etc.)
+
+        Returns:
+            The result from the Lua script, or None if Redis unavailable/fallback mode
+
+        Note:
+            This method is NOT available in in-memory fallback mode.
+            Callers should handle None return appropriately.
+        """
+        await self._ensure_connected()
+
+        # Lua scripts are not supported in fallback mode
+        if self._using_fallback:
+            logger.warning("Lua script execution not available in fallback mode")
+            return None
+
+        if not self._is_redis_available():
+            return None
+
+        async def _lua_operation() -> list[Any] | None:
+            result = await self._redis_client.eval(  # type: ignore[union-attr]
+                script,
+                len(keys),
+                *keys,
+                *args,
+            )
+            return cast("list[Any] | None", result)
+
+        return await self._execute_redis_operation(
+            _lua_operation,
+            "execute Lua script",
+            default_return=None,
+        )
 
     async def close(self) -> None:
         """Close cache connection gracefully."""

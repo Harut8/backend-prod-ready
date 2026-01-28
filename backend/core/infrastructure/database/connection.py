@@ -79,6 +79,13 @@ class PgAsyncSQLAlchemyAdapter:
 
     @database_error_handler
     def _connect_sync(self) -> None:
+        # NOTE: Database-level timeouts (statement_timeout, lock_timeout) are intentionally
+        # NOT set here. Python-level timeouts via @timeout decorators are the single source
+        # of truth. Setting both causes race conditions where:
+        # 1. DB timeout fires first, leaving asyncpg connection in bad state
+        # 2. Python timeout fires later, attempting cleanup on corrupted connection
+        # This leads to connection pool corruption under heavy load.
+        # See: backend/core/security/timeout.py for timeout configuration.
         self._engine = create_async_engine(
             url=self._url,
             echo=self._echo,
@@ -89,12 +96,8 @@ class PgAsyncSQLAlchemyAdapter:
             pool_recycle=1800,
             pool_use_lifo=True,
             connect_args={
-                "timeout": 4.0,
-                "command_timeout": 5.0,
-                "server_settings": {
-                    "statement_timeout": "5000",
-                    "lock_timeout": "4000",
-                },
+                "timeout": 4.0,  # Connection establishment timeout only
+                "command_timeout": None,  # Let Python-level timeouts handle this
             },
         )
         self._session_factory = async_sessionmaker(

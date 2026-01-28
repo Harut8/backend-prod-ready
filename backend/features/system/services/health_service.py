@@ -1,11 +1,11 @@
 """
 System Health Check Services.
 
-Provides health check capabilities for database and cache infrastructure.
+Application service that orchestrates health check operations.
+Handles infrastructure concerns and returns domain objects.
 """
 
 import asyncio
-from dataclasses import dataclass
 import time
 from typing import TYPE_CHECKING
 
@@ -14,41 +14,13 @@ import structlog
 
 from backend.core.infrastructure.cache.service import CacheService
 from backend.core.infrastructure.database.session import SessionFactory
+from backend.features.system.domain.health import HealthStatus, SystemHealth
 
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class HealthStatus:
-    """Health status for a component."""
-
-    healthy: bool
-    message: str
-    latency_ms: float | None = None
-
-
-@dataclass(frozen=True)
-class SystemHealth:
-    """Overall system health status."""
-
-    status: str  # "healthy", "degraded", "unhealthy"
-    database: HealthStatus
-    cache: HealthStatus
-
-    @property
-    def is_healthy(self) -> bool:
-        """Check if all critical components are healthy."""
-        return self.database.healthy
-
-    @property
-    def is_ready(self) -> bool:
-        """Check if system is ready to accept traffic."""
-        # Database is required, cache is optional (degraded mode)
-        return self.database.healthy
 
 
 class HealthCheckService:
@@ -147,16 +119,8 @@ class HealthCheckService:
             self.check_cache(),
         )
 
-        # Determine overall status
-        if db_health.healthy and cache_health.healthy:
-            status = "healthy"
-        elif db_health.healthy:
-            status = "degraded"  # Cache down but DB up
-        else:
-            status = "unhealthy"  # DB down
-
-        return SystemHealth(
-            status=status,
+        # Use factory method to create SystemHealth with computed status
+        return SystemHealth.from_components(
             database=db_health,
             cache=cache_health,
         )

@@ -6,6 +6,7 @@ Data Transfer Objects for AI text generation endpoints.
 
 from datetime import datetime
 
+from identity_plan_kit.plans.dto.usage import UsageInfo
 from pydantic import Field
 
 from backend.core.api.dtos.base import BaseRequestDto, BaseResponseDto
@@ -48,4 +49,5 @@ class GenerateTextResponseDto(BaseResponseDto):
     text: str = Field(..., description="The generated text")
     model: str = Field(..., description="The model used for generation")
     usage: GenerationUsageDto = Field(..., description="Token usage information")
+    quota_info: UsageInfo = Field(..., description="Quota information")
     created_at: datetime = Field(..., description="Generation timestamp")

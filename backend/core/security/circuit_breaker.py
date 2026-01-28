@@ -1,6 +1,7 @@
 from collections.abc import Awaitable, Callable
 from enum import Enum
 import functools
+import random
 import threading
 from typing import Any, ClassVar, ParamSpec, Self, TypeVar
 
@@ -15,6 +16,10 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 logger = structlog.get_logger(__name__)
+
+# Jitter percentage for circuit breaker reset timeout (0.0 to 1.0)
+# This prevents thundering herd when multiple circuit breakers reset simultaneously
+CIRCUIT_BREAKER_JITTER_FACTOR = 0.2  # 20% jitter
 
 
 class CircuitBreakerType(Enum):
@@ -66,28 +71,49 @@ class CircuitBreakerRegistry:
             cls._instance = None
         logger.debug("Circuit breaker registry reset")
 
+    @staticmethod
+    def _apply_jitter(base_timeout: int) -> int:
+        """Apply random jitter to timeout to prevent thundering herd.
+
+        When multiple circuit breakers reset at the same time, they can all
+        attempt to reconnect simultaneously, causing a spike that re-triggers
+        the circuit breaker. Adding jitter spreads out the reset attempts.
+
+        Args:
+            base_timeout: The base reset timeout in seconds
+
+        Returns:
+            Timeout with random jitter applied (always >= base_timeout)
+        """
+        jitter = random.uniform(0, CIRCUIT_BREAKER_JITTER_FACTOR) * base_timeout
+        return int(base_timeout + jitter)
+
     def _get_config(self, _cb_type: CircuitBreakerType) -> tuple[int, int, str]:
         """Get configuration for a circuit breaker type.
 
         Returns:
-            Tuple of (failure_threshold, reset_timeout, log_name)
+            Tuple of (failure_threshold, reset_timeout_with_jitter, log_name)
+
+        Note:
+            Reset timeout includes random jitter (0-20%) to prevent thundering herd
+            when multiple circuit breakers reset simultaneously.
         """
         if _cb_type == CircuitBreakerType.DATABASE:
             return (
                 SETTINGS.DATABASE.DB_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-                SETTINGS.DATABASE.DB_CIRCUIT_BREAKER_RESET_TIMEOUT,
+                self._apply_jitter(SETTINGS.DATABASE.DB_CIRCUIT_BREAKER_RESET_TIMEOUT),
                 "Database",
             )
         if _cb_type == CircuitBreakerType.EXTERNAL_API:
             return (
                 SETTINGS.EXTERNAL_API.EXTERNAL_API_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-                SETTINGS.EXTERNAL_API.EXTERNAL_API_CIRCUIT_BREAKER_RESET_TIMEOUT,
+                self._apply_jitter(SETTINGS.EXTERNAL_API.EXTERNAL_API_CIRCUIT_BREAKER_RESET_TIMEOUT),
                 "External API",
             )
         # CircuitBreakerType.REDIS
         return (
             SETTINGS.REDIS.REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-            SETTINGS.REDIS.REDIS_CIRCUIT_BREAKER_RESET_TIMEOUT,
+            self._apply_jitter(SETTINGS.REDIS.REDIS_CIRCUIT_BREAKER_RESET_TIMEOUT),
             "Redis",
         )
 
