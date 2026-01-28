@@ -1,0 +1,75 @@
+# =============================================================================
+# Prometheus Configuration for prod-ready-backend
+# =============================================================================
+
+global:
+  scrape_interval: 15s          # How often to scrape targets
+  evaluation_interval: 15s      # How often to evaluate rules
+  scrape_timeout: 10s           # Timeout for scrape requests
+
+  # Attach these labels to any time series or alerts
+  external_labels:
+    monitor: 'prod-ready-backend'
+    environment: 'development'
+
+# =============================================================================
+# Alerting Configuration (optional - add Alertmanager if needed)
+# =============================================================================
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# =============================================================================
+# Rule Files (optional - add alert rules if needed)
+# =============================================================================
+# rule_files:
+#   - "alerts/*.yml"
+
+# =============================================================================
+# Scrape Configurations
+# =============================================================================
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Prometheus self-monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: /metrics
+
+  # ---------------------------------------------------------------------------
+  # Backend Application Metrics
+  # ---------------------------------------------------------------------------
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['backend:8000']
+    metrics_path: /metrics
+    scrape_interval: 10s
+    # Relabel to add instance name
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'backend'
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Metrics (if using postgres_exporter)
+  # ---------------------------------------------------------------------------
+  # - job_name: 'postgres'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']
+
+  # ---------------------------------------------------------------------------
+  # Redis Metrics (if using redis_exporter)
+  # ---------------------------------------------------------------------------
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+
+  # ---------------------------------------------------------------------------
+  # Nginx Metrics (if using nginx-prometheus-exporter)
+  # ---------------------------------------------------------------------------
+  # - job_name: 'nginx'
+  #   static_configs:
+  #     - targets: ['nginx-exporter:9113']

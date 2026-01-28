@@ -112,7 +112,7 @@ class PgDbSettings(AppSettings):
     POSTGRES_USER: str = Field(default="prod_user", alias="POSTGRES_USER")
     POSTGRES_PASSWORD: SecretStr = Field(default_factory=lambda: SecretStr("prod_password"), alias="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field(default="prod_ready_db", alias="POSTGRES_DB")
-    POSTGRES_HOST: str = Field(default="postgres", alias="POSTGRES_HOST")
+    POSTGRES_HOST: str = Field(default="localhost", alias="POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, alias="POSTGRES_PORT")
     DATABASE_URL: PostgresDsn | str = Field(default="", alias="DATABASE_URL")
 
@@ -364,7 +364,7 @@ class RedisSettings(AppSettings):
                 port=int(data.setdefault("REDIS_PORT", 6379)),
                 username=data.setdefault("REDIS_USER", "") or None,
                 password=data.setdefault("REDIS_PASSWORD", "") or None,
-                path=f"/{data.setdefault('REDIS_DB', 0)}",
+                path=str(data.setdefault("REDIS_DB", 0)),
             )
             data["REDIS_URL"] = str(_built_uri.unicode_string())
         return data

@@ -11,6 +11,7 @@ import redis.asyncio as redis
 import structlog
 
 from backend.core.conf.settings import SETTINGS
+from backend.core.observability.tracing import instrument_redis_client
 from backend.core.security.circuit_breaker import (
     get_redis_circuit_breaker_factory,
     type_preserving_circuit_breaker,
@@ -268,6 +269,8 @@ class CacheService:
             # Test connection
             if self._redis_client:
                 await self._redis_client.ping()
+                # Instrument for OpenTelemetry tracing
+                instrument_redis_client(self._redis_client)
             logger.info("Redis cache service connected")
             self._initialized = True
             self._record_connection_success()

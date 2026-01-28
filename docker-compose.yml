@@ -78,7 +78,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile.dev
-    container_name: prb-nginx-dev
+    container_name: prb-nginx
     hostname: nginx
     restart: unless-stopped
     ports:
@@ -116,14 +116,17 @@ services:
       - "${APP_PORT:-8000}:8000"
     environment:
       - ENV_STAGE=${ENV_STAGE:-local}
+      # Database - use Docker service names (overrides .env file)
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-prod_ready_db}
       - POSTGRES_USER=${POSTGRES_USER:-prod_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-prod_password}
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      # Redis - use Docker service name (overrides .env file)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      # App settings
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
       - FORWARDED_ALLOW_IPS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
       - PYTHONPATH=/app:/

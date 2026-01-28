@@ -44,6 +44,7 @@ COPY __init__.py /app/backend/
 COPY core/ /app/backend/core/
 COPY features/ /app/backend/features/
 COPY shared/ /app/backend/shared/
+COPY migrations/ /app/migrations/
 COPY logging_config.yaml alembic.ini /app/
 
 # =============================================================================
@@ -140,7 +141,7 @@ FROM runtime AS development
 USER root
 
 # Override environment for development
-ENV ENV_STAGE=dev \
+ENV ENV_STAGE=local \
     SERVER_MODE=development \
     DEBUG=true
 

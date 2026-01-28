@@ -1,0 +1,122 @@
+# =============================================================================
+# prod-ready-backend - Observability Stack
+# Jaeger (tracing), Prometheus (metrics), Grafana (dashboards)
+#
+# Usage:
+#   make tracing        # Start with Jaeger tracing
+#   make tracing-down   # Stop tracing stack
+# =============================================================================
+
+services:
+  # =============================================================================
+  # JAEGER - Distributed Tracing
+  # UI: http://localhost:16686
+  # =============================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: prb-jaeger
+    hostname: jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=info
+    networks:
+      - prb-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:16686/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # =============================================================================
+  # BACKEND OVERRIDES - Enable tracing to Jaeger
+  # =============================================================================
+  backend:
+    environment:
+      - TRACING_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_SERVICE_NAME=prod-ready-backend
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=1.0
+      - METRICS_ENABLED=true
+    depends_on:
+      jaeger:
+        condition: service_healthy
+
+  # =============================================================================
+  # PROMETHEUS - Metrics Collection (uncomment to enable)
+  # UI: http://localhost:9090
+  # =============================================================================
+  # prometheus:
+  #   image: prom/prometheus:v2.50.1
+  #   container_name: prb-prometheus
+  #   hostname: prometheus
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #     - prometheus_data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--storage.tsdb.retention.time=15d'
+  #     - '--web.enable-lifecycle'
+  #   networks:
+  #     - prb-network
+  #   depends_on:
+  #     backend:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 10s
+
+  # =============================================================================
+  # GRAFANA - Dashboards & Visualization (uncomment to enable)
+  # UI: http://localhost:3001 (admin/admin)
+  # =============================================================================
+  # grafana:
+  #   image: grafana/grafana:10.4.1
+  #   container_name: prb-grafana
+  #   hostname: grafana
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3001:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_USER=admin
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #     - GF_USERS_ALLOW_SIGN_UP=false
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #     - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+  #   networks:
+  #     - prb-network
+  #   depends_on:
+  #     - prometheus
+  #     - jaeger
+  #   healthcheck:
+  #     test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 30s
+
+# =============================================================================
+# VOLUMES (uncomment if using Prometheus/Grafana)
+# =============================================================================
+# volumes:
+#   prometheus_data:
+#     driver: local
+#     name: prb-prometheus-data
+#   grafana_data:
+#     driver: local
+#     name: prb-grafana-data

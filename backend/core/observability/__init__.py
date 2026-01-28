@@ -22,6 +22,8 @@ from backend.core.observability.timing import timed_block, timing_decorator
 from backend.core.observability.tracing import (
     create_span,
     get_current_trace_context,
+    instrument_redis_client,
+    instrument_sqlalchemy_engine,
     record_exception,
     setup_tracing,
 )
@@ -37,6 +39,8 @@ __all__ = [
     "get_current_trace_context",
     "get_request_id",
     "get_user_id",
+    "instrument_redis_client",
+    "instrument_sqlalchemy_engine",
     "record_circuit_breaker_failure",
     "record_circuit_breaker_state",
     "record_circuit_breaker_success",

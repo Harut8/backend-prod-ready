@@ -19,13 +19,14 @@ services:
     build:
       target: development
       args:
-        ENV_STAGE: dev
+        ENV_STAGE: local
     environment:
-      - ENV_STAGE=dev
+      - ENV_STAGE=local
       - DEBUG=true
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=DEBUG
       - RELOAD=true
       - WATCHFILES_LOGGING=0
+      - GRANIAN_WORKERS=2
     volumes:
       - ./backend:/app/backend:rw
       - /app/backend/__pycache__

@@ -173,8 +173,10 @@ def setup_tracing(app: FastAPI) -> None:
 
     # Instrument frameworks
     FastAPIInstrumentor.instrument_app(app, excluded_urls="health,metrics,ready,live")
-    SQLAlchemyInstrumentor().instrument()
-    RedisInstrumentor().instrument()
+    # NOTE: SQLAlchemy engines are instrumented explicitly via instrument_sqlalchemy_engine()
+    # because async engines need to be instrumented after creation
+    # NOTE: Redis is instrumented explicitly via instrument_redis_client()
+    # because clients are created lazily after app startup
 
     logger.info(
         "OpenTelemetry tracing enabled",
@@ -198,6 +200,66 @@ def _build_sampler(
     if sampler_name == "always_off":
         return always_off
     return parent_based_ratio(sampler_arg)
+
+
+def instrument_sqlalchemy_engine(engine: Any) -> None:
+    """
+    Instrument a SQLAlchemy engine for distributed tracing.
+
+    This should be called after engine creation for async engines,
+    as the generic SQLAlchemyInstrumentor().instrument() hook doesn't
+    automatically capture async engines created after setup.
+
+    Args:
+        engine: SQLAlchemy Engine or AsyncEngine instance
+    """
+    if not SETTINGS.TRACING.TRACING_ENABLED:
+        return
+
+    if not SETTINGS.TRACING.OTEL_EXPORTER_OTLP_ENDPOINT:
+        return
+
+    try:
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor  # noqa: PLC0415
+
+        # For async engines, we need to instrument the underlying sync_engine
+        actual_engine = getattr(engine, "sync_engine", engine)
+        SQLAlchemyInstrumentor().instrument(engine=actual_engine, enable_commenter=True)
+        logger.debug("SQLAlchemy engine instrumented for tracing")
+    except ImportError:
+        logger.debug("SQLAlchemy instrumentation not available")
+    except Exception:
+        logger.exception("Failed to instrument SQLAlchemy engine")
+
+
+def instrument_redis_client(client: Any) -> None:
+    """
+    Instrument a Redis client for distributed tracing.
+
+    This should be called after the Redis client is created,
+    as the generic RedisInstrumentor().instrument() may not capture
+    clients created after setup or async clients.
+
+    Args:
+        client: Redis client instance (sync or async)
+    """
+    if not SETTINGS.TRACING.TRACING_ENABLED:
+        return
+
+    if not SETTINGS.TRACING.OTEL_EXPORTER_OTLP_ENDPOINT:
+        return
+
+    try:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor  # noqa: PLC0415
+
+        # Instrument globally - this patches the redis module
+        # Safe to call multiple times, will only instrument once
+        RedisInstrumentor().instrument()
+        logger.debug("Redis client instrumented for tracing")
+    except ImportError:
+        logger.debug("Redis instrumentation not available")
+    except Exception:
+        logger.exception("Failed to instrument Redis client")
 
 
 def get_current_trace_context() -> dict[str, Any]:

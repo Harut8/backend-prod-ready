@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session, sessionmaker
 import structlog
 
+from backend.core.conf.settings import SETTINGS
 from backend.core.infrastructure.database.error_handler import database_error_handler
 from backend.core.observability.metrics import update_db_pool_metrics
+from backend.core.observability.tracing import instrument_sqlalchemy_engine
 from backend.core.security.timeout import timeout
 
 
@@ -131,7 +133,13 @@ class PgAsyncSQLAlchemyAdapter:
             expire_on_commit=False,
         )
 
-        self._setup_event_listeners()
+        # Instrument engine for OpenTelemetry tracing (must be done after engine creation)
+        instrument_sqlalchemy_engine(self._engine)
+
+        # Only enable SQL query timing listeners in non-production environments
+        # to reduce tracing overhead (~13ms per query)
+        if SETTINGS.APP.ENVIRONMENT != "prod":
+            self._setup_event_listeners()
         self._initialized = True
         if self._logger:
             self._logger.info("Connected to Postgres database")

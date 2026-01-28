@@ -75,10 +75,10 @@ def create_identity_kit_config() -> IdentityPlanKitConfig:
         google_redirect_uri=SETTINGS.GOOGLE.GOOGLE_OAUTH_REDIRECT_URI,
         # =================================================================
         # Redis (for distributed caching/sessions)
-        # Only use Redis in production; local/dev uses in-memory store
+        # Use Redis when available (required for Docker/multi-instance setups)
         # =================================================================
-        redis_url=SETTINGS.REDIS.REDIS_URL if _is_production() else None,
-        require_redis=_is_production(),  # In-memory store OK for local/dev
+        redis_url=SETTINGS.REDIS.REDIS_URL,
+        require_redis=_is_production(),  # Only fail startup in prod if Redis unavailable
         # =================================================================
         # =================================================================
         cookie_secure=_is_production(),
