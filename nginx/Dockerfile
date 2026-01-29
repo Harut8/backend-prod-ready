@@ -1,5 +1,5 @@
 # =============================================================================
-# prod-ready-backend - Production Nginx Dockerfile
+# kinonee - Production Nginx Dockerfile
 # Based on Alpine for minimal size and security
 # =============================================================================
 

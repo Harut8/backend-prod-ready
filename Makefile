@@ -5,7 +5,7 @@
 ENV_FILE := backend/core/conf/envs/.env.local
 COMPOSE_FILE := docker-compose.yml
 SERVICE_NAME := backend
-CONTAINER_NAME := prb-backend
+CONTAINER_NAME := kinonee-backend
 APP_PORT := 8000
 
 # Worker counts by environment
@@ -15,9 +15,9 @@ WORKERS_PROD := 8
 
 # Common env vars for docker compose commands (required vars with defaults)
 DOCKER_ENV := REDIS_PASSWORD=$${REDIS_PASSWORD:-redis} \
-	POSTGRES_DB=$${POSTGRES_DB:-prod_ready_db} \
-	POSTGRES_USER=$${POSTGRES_USER:-prod_user} \
-	POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-prod_password}
+	POSTGRES_DB=$${POSTGRES_DB:-kinonee_db} \
+	POSTGRES_USER=$${POSTGRES_USER:-kinonee_user} \
+	POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-kinonee_password}
 
 # Base docker compose command
 COMPOSE_CMD := $(DOCKER_ENV) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE)

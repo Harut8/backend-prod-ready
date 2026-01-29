@@ -1,5 +1,5 @@
 # =============================================================================
-# prod-ready-backend - Production Docker Compose Configuration
+# kinonee - Production Docker Compose Configuration
 # Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # This file overrides the base docker-compose.yml for production deployments:
@@ -18,7 +18,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile
-    container_name: prb-nginx
+    container_name: kinonee-nginx
     hostname: nginx
     restart: always
     ports:
@@ -33,7 +33,7 @@ services:
       # Logs
       - nginx_logs:/var/log/nginx
     networks:
-      - prb-network
+      - kinonee-network
     depends_on:
       backend:
         condition: service_healthy
@@ -85,7 +85,7 @@ services:
       # Remove code mount in production (no hot-reload)
       - backend_logs:/app/logs
     networks:
-      - prb-network
+      - kinonee-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -206,21 +206,21 @@ services:
 volumes:
   postgres_data:
     driver: local
-    name: prb-postgres-data-prod
+    name: kinonee-postgres-data-prod
   redis_data:
     driver: local
-    name: prb-redis-data-prod
+    name: kinonee-redis-data-prod
   backend_logs:
     driver: local
-    name: prb-backend-logs-prod
+    name: kinonee-backend-logs-prod
   nginx_logs:
     driver: local
-    name: prb-nginx-logs-prod
+    name: kinonee-nginx-logs-prod
 
 # =============================================================================
 # NETWORKS
 # =============================================================================
 networks:
-  prb-network:
+  kinonee-network:
     driver: bridge
-    name: prb-network-prod
+    name: kinonee-network-prod

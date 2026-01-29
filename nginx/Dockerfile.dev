@@ -1,5 +1,5 @@
 # =============================================================================
-# prod-ready-backend - Development Nginx Dockerfile
+# kinonee - Development Nginx Dockerfile
 # Lightweight Alpine-based image optimized for development and load testing
 # =============================================================================
 

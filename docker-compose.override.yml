@@ -1,5 +1,5 @@
 # =============================================================================
-# prod-ready-backend - Development Override
+# kinonee - Development Override
 # Development-specific configurations and optimizations
 # This file is automatically merged by docker compose for development
 # WARNING: This file is ignored in production builds (be-docker-prod)

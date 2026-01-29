@@ -1,5 +1,5 @@
 # =============================================================================
-# prod-ready-backend - Git Ignore Configuration
+# kinonee - Git Ignore Configuration
 # =============================================================================
 
 # =============================================================================
@@ -179,7 +179,7 @@ claude-agents/
 # PROJECT SPECIFIC
 # =============================================================================
 # Legacy egg-info directory (no longer used)
-backend/prod_ready_backend.egg-info/
+backend/kinonee.egg-info/
 backend/core/conf/envs/
 backend/profiles/
 data/

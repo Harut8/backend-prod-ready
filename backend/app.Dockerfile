@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 # =============================================================================
-# prod-ready-backend - Production-optimized FastAPI Docker Image
+# kinonee - Production-optimized FastAPI Docker Image
 # =============================================================================
 
 FROM python:3.11.11-slim-bookworm AS builder
@@ -127,7 +127,7 @@ CMD ["sh", "-c", "cd /dev/shm && exec granian \
      --backpressure ${GRANIAN_BACKPRESSURE:-512} \
      --workers-lifetime 43200 \
      --respawn-interval 30 \
-     --process-name prod-ready-backend \
+     --process-name kinonee \
      --log \
      --log-level info \
      --proxy-headers \
@@ -174,8 +174,8 @@ CMD ["sh", "-c", "echo '=== DEVELOPMENT MODE: Granian with hot-reload ===' && gr
 # =============================================================================
 # METADATA
 # =============================================================================
-LABEL maintainer="prod-ready-backend" \
+LABEL maintainer="kinonee" \
       version="2.1.0" \
       description="Production-optimized FastAPI backend with Granian ASGI server" \
-      org.opencontainers.image.title="prod-ready-backend" \
-      org.opencontainers.image.vendor="prod-ready-backend"
+      org.opencontainers.image.title="kinonee" \
+      org.opencontainers.image.vendor="kinonee"

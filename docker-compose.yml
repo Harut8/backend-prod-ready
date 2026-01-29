@@ -1,5 +1,5 @@
 # =============================================================================
-# prod-ready-backend - Docker Compose Configuration
+# kinonee - Docker Compose Configuration
 # Production-ready FastAPI backend with PostgreSQL, Redis, and Nginx
 # =============================================================================
 
@@ -10,7 +10,7 @@ services:
   postgres:
     image: postgis/postgis:17-3.5-alpine
     platform: linux/amd64
-    container_name: prb-postgres
+    container_name: kinonee-postgres
     hostname: postgres
     restart: unless-stopped
     environment:
@@ -24,9 +24,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
-      - prb-network
+      - kinonee-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prod_user} -d ${POSTGRES_DB:-prod_ready_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kinonee_user} -d ${POSTGRES_DB:-kinonee_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -53,7 +53,7 @@ services:
   # =============================================================================
   redis:
     image: redis:7-alpine
-    container_name: prb-redis
+    container_name: kinonee-redis
     hostname: redis
     restart: unless-stopped
     ports:
@@ -62,7 +62,7 @@ services:
       - redis_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     networks:
-      - prb-network
+      - kinonee-network
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
@@ -78,7 +78,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile.dev
-    container_name: prb-nginx
+    container_name: kinonee-nginx
     hostname: nginx
     restart: unless-stopped
     ports:
@@ -88,7 +88,7 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - nginx_logs:/var/log/nginx
     networks:
-      - prb-network
+      - kinonee-network
     depends_on:
       backend:
         condition: service_healthy
@@ -109,7 +109,7 @@ services:
       target: ${DOCKER_TARGET:-development}
       args:
         ENV_STAGE: ${ENV_STAGE:-local}
-    container_name: prb-backend
+    container_name: kinonee-backend
     hostname: backend
     restart: unless-stopped
     ports:
@@ -119,9 +119,9 @@ services:
       # Database - use Docker service names (overrides .env file)
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-prod_ready_db}
-      - POSTGRES_USER=${POSTGRES_USER:-prod_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-prod_password}
+      - POSTGRES_DB=${POSTGRES_DB:-kinonee_db}
+      - POSTGRES_USER=${POSTGRES_USER:-kinonee_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-kinonee_password}
       # Redis - use Docker service name (overrides .env file)
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -134,7 +134,7 @@ services:
     volumes:
       - backend_logs:/app/logs
     networks:
-      - prb-network
+      - kinonee-network
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,16 +148,16 @@ services:
       start_period: 10s
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`api.prod-ready.local`)"
+      - "traefik.http.routers.backend.rule=Host(`api.kinonee.local`)"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
 
 # =============================================================================
 # NETWORKS
 # =============================================================================
 networks:
-  prb-network:
+  kinonee-network:
     driver: bridge
-    name: prb-network
+    name: kinonee-network
 
 # =============================================================================
 # VOLUMES
@@ -165,13 +165,13 @@ networks:
 volumes:
   postgres_data:
     driver: local
-    name: prb-postgres-data
+    name: kinonee-postgres-data
   redis_data:
     driver: local
-    name: prb-redis-data
+    name: kinonee-redis-data
   backend_logs:
     driver: local
-    name: prb-backend-logs
+    name: kinonee-backend-logs
   nginx_logs:
     driver: local
-    name: prb-nginx-logs
+    name: kinonee-nginx-logs

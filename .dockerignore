@@ -1,79 +1,137 @@
+# =============================================================================
+# kinonee - Root Docker Ignore
+# Excludes files from Docker build context to reduce build time and image size
+# =============================================================================
+
+# -----------------------------------------------------------------------------
 # Git
-.git
+# -----------------------------------------------------------------------------
+.git/
 .gitignore
 .gitattributes
+.gitmodules
 
+# -----------------------------------------------------------------------------
+# Environment Files (SECURITY: Never include in images!)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
-# CI
-.codeclimate.yml
-.travis.yml
-.taskcluster.yml
+# -----------------------------------------------------------------------------
+# IDE and Editor
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-*
 
-# Docker
-docker-compose.yml
-Dockerfile
-.docker
-.dockerignore
+# -----------------------------------------------------------------------------
+# OS Generated
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
 
-# Byte-compiled / optimized / DLL files
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
 **/__pycache__/
 **/*.py[cod]
-
-# C extensions
+**/*.pyo
+**/*.pyd
 *.so
-
-# Distribution / packaging
 .Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
 *.egg-info/
-.installed.cfg
 *.egg
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.cache
-nosetests.xml
-coverage.xml
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Virtual environment
-.env
 .venv/
 venv/
+env/
+ENV/
 
-# PyCharm
-.idea
+# -----------------------------------------------------------------------------
+# Testing and Quality
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+coverage.xml
+*.cover
+
+# -----------------------------------------------------------------------------
+# Build Artifacts
+# -----------------------------------------------------------------------------
+build/
+dist/
+*.manifest
+*.spec
+target/
+
+# -----------------------------------------------------------------------------
+# Documentation (not needed in runtime image)
+# -----------------------------------------------------------------------------
+*.md
+!backend/migrations/*.md
+docs/
+planning/
+
+# -----------------------------------------------------------------------------
+# CI/CD
+# -----------------------------------------------------------------------------
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+.codeclimate.yml
+.taskcluster.yml
+Jenkinsfile
+
+# -----------------------------------------------------------------------------
+# Docker (prevent recursive inclusion)
+# -----------------------------------------------------------------------------
+docker-compose*.yml
+.dockerignore
+.docker/
+
+# -----------------------------------------------------------------------------
+# Development Files
+# -----------------------------------------------------------------------------
+Makefile
+*.log
+logs/
+tmp/
+temp/
+*.bak
+*.tmp
+
+# -----------------------------------------------------------------------------
+# Project Specific
+# -----------------------------------------------------------------------------
+observability/
+.claude/
+claude-agents/
+data/
+.charts/
+bandit-report.json
+safety-report.json
+
+# -----------------------------------------------------------------------------
+# Large/Binary Files
+# -----------------------------------------------------------------------------
+*.mmdb
+*.sqlite
+*.sqlite3
+*.db

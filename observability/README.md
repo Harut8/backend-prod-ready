@@ -1,6 +1,6 @@
 # Observability Stack
 
-Distributed tracing with Jaeger for prod-ready-backend.
+Distributed tracing with Jaeger for kinonee.
 
 ## Quick Start
 

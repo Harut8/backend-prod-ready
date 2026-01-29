@@ -1,5 +1,5 @@
 # =============================================================================
-# Prometheus Configuration for prod-ready-backend
+# Prometheus Configuration for kinonee
 # =============================================================================
 
 global:
@@ -9,7 +9,7 @@ global:
 
   # Attach these labels to any time series or alerts
   external_labels:
-    monitor: 'prod-ready-backend'
+    monitor: 'kinonee'
     environment: 'development'
 
 # =============================================================================
