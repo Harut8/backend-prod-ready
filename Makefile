@@ -13,14 +13,8 @@ WORKERS_LOCAL := 1
 WORKERS_DEV := 2
 WORKERS_PROD := 8
 
-# Common env vars for docker compose commands (required vars with defaults)
-DOCKER_ENV := REDIS_PASSWORD=$${REDIS_PASSWORD:-redis} \
-	POSTGRES_DB=$${POSTGRES_DB:-kinonee_db} \
-	POSTGRES_USER=$${POSTGRES_USER:-kinonee_user} \
-	POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-kinonee_password}
-
-# Base docker compose command
-COMPOSE_CMD := $(DOCKER_ENV) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE)
+# Base docker compose command (uses .env.local as source of truth)
+COMPOSE_CMD := docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE)
 
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
@@ -114,7 +108,7 @@ docker-dev: env-setup
 prod: env-setup
 	@echo "Starting production mode (8 workers)..."
 	@if [ -f docker-compose.override.yml ]; then mv docker-compose.override.yml docker-compose.override.yml.bak; fi
-	@$(DOCKER_ENV) ENV_STAGE=prod docker compose -f $(COMPOSE_FILE) -f docker-compose.prod.yml --env-file $(ENV_FILE) up --build
+	@ENV_STAGE=prod docker compose -f $(COMPOSE_FILE) -f docker-compose.prod.yml --env-file $(ENV_FILE) up --build
 	@if [ -f docker-compose.override.yml.bak ]; then mv docker-compose.override.yml.bak docker-compose.override.yml; fi
 
 # Infrastructure only
@@ -215,6 +209,8 @@ clean:
 	@docker images -qf "dangling=true" | xargs -r docker rmi -f 2>/dev/null || true
 	@echo "Removing exited containers..."
 	@docker ps -aqf "status=exited" | xargs -r docker rm -f 2>/dev/null || true
+	@echo "Removing volumes..."
+	@$(COMPOSE_CMD) down -v --remove-orphans 2>/dev/null || true
 	@echo "Cleaning Python caches..."
 	@find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
@@ -241,7 +237,7 @@ ifeq ($(ENV),local)
 else ifeq ($(ENV),prod)
 	@echo "Starting tracing (prod mode: 8 workers)..."
 	@if [ -f docker-compose.override.yml ]; then mv docker-compose.override.yml docker-compose.override.yml.bak; fi
-	@$(DOCKER_ENV) ENV_STAGE=prod docker compose -f $(COMPOSE_FILE) -f docker-compose.prod.yml -f docker-compose.observability.yml --env-file $(ENV_FILE) up -d
+	@ENV_STAGE=prod docker compose -f $(COMPOSE_FILE) -f docker-compose.prod.yml -f docker-compose.observability.yml --env-file $(ENV_FILE) up -d
 	@if [ -f docker-compose.override.yml.bak ]; then mv docker-compose.override.yml.bak docker-compose.override.yml; fi
 	@echo ""
 	@echo "Jaeger UI: http://localhost:16686"
